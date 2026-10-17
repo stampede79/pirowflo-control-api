@@ -9,9 +9,20 @@ app = FastAPI(
     version="0.1.0"
 )
 
-SUPERVISORCTL = "/home/pi/pirowflo/venv/bin/supervisorctl"
-SUPERVISOR_CONFIG = "/home/pi/pirowflo/services/supervisord.conf"
-CONTROL_SOCKET = "/tmp/pirowflo-control.sock"
+SUPERVISORCTL = os.environ.get(
+    "PIROWFLO_SUPERVISORCTL",
+    "/opt/pirowflo/venv/bin/supervisorctl",
+)
+
+SUPERVISOR_CONFIG = os.environ.get(
+    "PIROWFLO_SUPERVISOR_CONFIG",
+    "/opt/pirowflo/services/supervisord.conf",
+)
+
+CONTROL_SOCKET = os.environ.get(
+    "PIROWFLO_CONTROL_SOCKET",
+    "/tmp/pirowflo-control.sock",
+)
 
 PROFILES = {
     "combined": "pirowflo_SR_SmartRow_Bluetooth_AntPlus",
