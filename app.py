@@ -210,9 +210,16 @@ def metrics(x_api_key: str = Header(...)):
 
     raw = get_live_metrics()
 
+    smartrow = get_smartrow_status()
+
     stroke_rate_raw = float(raw.get("stroke_rate", 0) or 0)
 
     return {
+        "smartrow_connected": smartrow["connected"],
+        "smartrow_ready": (
+            smartrow["connected"]
+            and smartrow["services_resolved"]
+        ),
         "rowing": (
             float(raw.get("watts", 0) or 0) > 0
             or float(raw.get("instantaneous pace", 0) or 0) > 0
