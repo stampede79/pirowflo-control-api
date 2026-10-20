@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import socket
@@ -131,6 +132,36 @@ def supervisor_status():
 
     return result.stdout
 
+def get_live_metrics():
+    if not os.path.exists(CONTROL_SOCKET):
+        raise HTTPException(
+            status_code=503,
+            detail="PiRowFlo control socket is not available",
+        )
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2)
+            sock.connect(CONTROL_SOCKET)
+            sock.sendall(b"metrics")
+            response = sock.recv(4096).decode().strip()
+
+        if not response:
+            raise HTTPException(
+                status_code=503,
+                detail="PiRowFlo returned no metrics",
+            )
+
+        return json.loads(response)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not read PiRowFlo metrics: {e}",
+        )
+
 
 @app.get("/")
 def root():
@@ -171,6 +202,31 @@ def status(x_api_key: str = Header(...)):
     return {
         "profiles": profiles,
         "smartrow": get_smartrow_status(),
+    }
+
+@app.get("/api/metrics")
+def metrics(x_api_key: str = Header(...)):
+    require_api_key(x_api_key)
+
+    raw = get_live_metrics()
+
+    stroke_rate_raw = float(raw.get("stroke_rate", 0) or 0)
+
+    return {
+        "rowing": (
+            float(raw.get("watts", 0) or 0) > 0
+            or float(raw.get("instantaneous pace", 0) or 0) > 0
+        ),
+        "power_w": int(raw.get("watts", 0) or 0),
+        "stroke_rate_spm": stroke_rate_raw / 2,
+        "pace_500m_seconds": int(
+            raw.get("instantaneous pace", 0) or 0
+        ),
+        "distance_m": int(raw.get("total_distance_m", 0) or 0),
+        "elapsed_seconds": int(raw.get("elapsedtime", 0) or 0),
+        "heart_rate_bpm": int(raw.get("heart_rate", 0) or 0),
+        "power_avg_w": float(raw.get("watts_avg", 0) or 0),
+        "pace_avg_500m_seconds": int(raw.get("pace_avg", 0) or 0),
     }
 
 def supervisor_command(command, process_name):
