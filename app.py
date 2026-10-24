@@ -25,6 +25,13 @@ CONTROL_SOCKET = os.environ.get(
     "/tmp/pirowflo-control.sock",
 )
 
+SMARTROW_ADAPTER_MAC = os.environ.get(
+    "PIROWFLO_SMARTROW_ADAPTER_MAC",
+    "00:1A:7D:DA:71:15",
+).lower()
+
+ANT_USB_VENDOR = "0fcf"
+
 PROFILES = {
     "combined": "pirowflo_SR_SmartRow_Bluetooth_AntPlus",
     "bluetooth": "pirowflo_SR_Smartrow_Bluetooth_only",
@@ -43,6 +50,178 @@ def require_api_key(x_api_key: str = Header(...)):
             status_code=401,
             detail="Invalid API key",
         )
+
+def get_smartrow_adapter_status():
+    result = {
+        "available": False,
+        "adapter": None,
+        "powered": False,
+        "soft_blocked": False,
+        "hard_blocked": False,
+    }
+
+    try:
+        tree = subprocess.run(
+            ["busctl", "tree", "org.bluez"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+
+        adapters = set()
+
+        for line in tree.stdout.splitlines():
+            start = line.find("/org/bluez/hci")
+
+            if start == -1:
+                continue
+
+            path = line[start:].strip()
+            parts = path.split("/")
+
+            if len(parts) >= 4:
+                adapters.add(parts[3])
+
+        for adapter in adapters:
+            adapter_path = f"/org/bluez/{adapter}"
+
+            address_result = subprocess.run(
+                [
+                    "busctl",
+                    "get-property",
+                    "org.bluez",
+                    adapter_path,
+                    "org.bluez.Adapter1",
+                    "Address",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+
+            if address_result.returncode != 0:
+                continue
+
+            address = (
+                address_result.stdout
+                .strip()
+                .removeprefix('s "')
+                .removesuffix('"')
+                .lower()
+            )
+
+            if address != SMARTROW_ADAPTER_MAC:
+                continue
+
+            result["available"] = True
+            result["adapter"] = adapter
+
+            powered_result = subprocess.run(
+                [
+                    "busctl",
+                    "get-property",
+                    "org.bluez",
+                    adapter_path,
+                    "org.bluez.Adapter1",
+                    "Powered",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+
+            result["powered"] = (
+                powered_result.returncode == 0
+                and powered_result.stdout.strip() == "b true"
+            )
+
+            rfkill_path = os.path.join(
+                "/sys/class/bluetooth",
+                adapter,
+            )
+
+            try:
+                entries = os.listdir(rfkill_path)
+
+                rfkill_entry = next(
+                    (
+                        entry
+                        for entry in entries
+                        if entry.startswith("rfkill")
+                    ),
+                    None,
+                )
+
+                if rfkill_entry:
+                    base = os.path.join(
+                        rfkill_path,
+                        rfkill_entry,
+                    )
+
+                    with open(os.path.join(base, "soft")) as f:
+                        result["soft_blocked"] = (
+                            f.read().strip() == "1"
+                        )
+
+                    with open(os.path.join(base, "hard")) as f:
+                        result["hard_blocked"] = (
+                            f.read().strip() == "1"
+                        )
+
+            except OSError:
+                pass
+
+            return result
+
+    except Exception:
+        pass
+
+    return result
+
+def get_ant_status():
+    result = {
+        "available": False,
+    }
+
+    try:
+        usb_root = "/sys/bus/usb/devices"
+
+        supported_products = {
+            "1008",  # ANTUSB2 / Suunto
+            "1009",  # Garmin
+            "1004",  # Older ANT stick
+        }
+
+        for entry in os.listdir(usb_root):
+            device_path = os.path.join(usb_root, entry)
+
+            vendor_file = os.path.join(device_path, "idVendor")
+            product_file = os.path.join(device_path, "idProduct")
+
+            if not os.path.isfile(vendor_file):
+                continue
+
+            if not os.path.isfile(product_file):
+                continue
+
+            try:
+                with open(vendor_file) as f:
+                    vendor = f.read().strip().lower()
+
+                with open(product_file) as f:
+                    product = f.read().strip().lower()
+
+            except OSError:
+                continue
+
+            if vendor == ANT_USB_VENDOR and product in supported_products:
+                result["available"] = True
+                return result
+
+    except Exception:
+        pass
+
+    return result
 
 def get_smartrow_status():
     smartrow_device = "dev_E8_F6_A2_1E_C4_69"
@@ -202,6 +381,10 @@ def status(x_api_key: str = Header(...)):
     return {
         "profiles": profiles,
         "smartrow": get_smartrow_status(),
+        "hardware": {
+            "smartrow_bluetooth": get_smartrow_adapter_status(),
+            "ant": get_ant_status(),
+        },
     }
 
 @app.get("/api/metrics")
