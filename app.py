@@ -4,6 +4,10 @@ import subprocess
 import socket
 
 from fastapi import FastAPI, Header, HTTPException
+from openai import OpenAI
+from pydantic import BaseModel, Field
+from pathlib import Path
+from training_plan_apply import apply_training_plan
 
 app = FastAPI(
     title="PiRowFlo Control API",
@@ -43,6 +47,19 @@ API_KEY = os.environ.get("PIROWFLO_API_KEY")
 if not API_KEY:
     raise RuntimeError("PIROWFLO_API_KEY is not configured")
 
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    raise RuntimeError("OPENAI_API_KEY is not configured")
+
+openai_client = OpenAI(
+    api_key=OPENAI_API_KEY,
+)
+
+TRAINING_PLAN_DIR = Path(
+    "/var/lib/pirowflo-control/training-plans"
+)
+
 
 def require_api_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
@@ -50,6 +67,28 @@ def require_api_key(x_api_key: str = Header(...)):
             status_code=401,
             detail="Invalid API key",
         )
+
+class TrainingPlanRequest(BaseModel):
+    year: int = Field(ge=2026, le=2100)
+    month: int = Field(ge=1, le=12)
+    sessions_per_week: int = Field(ge=1, le=7)
+
+
+class TrainingPlanWorkout(BaseModel):
+    date: str
+    name: str
+    description: str
+    warmup: str | None = None
+    repeat: int = Field(default=1, ge=1, le=20)
+    work: str
+    recovery: str | None = None
+    cooldown: str | None = None
+
+
+class TrainingPlan(BaseModel):
+    year: int
+    month: int
+    workouts: list[TrainingPlanWorkout]
 
 def get_smartrow_adapter_status():
     result = {
@@ -387,6 +426,129 @@ def status(x_api_key: str = Header(...)):
         },
     }
 
+@app.get("/api/training-plan/draft")
+def get_training_plan_draft(
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    if not TRAINING_PLAN_DIR.exists():
+        return {
+            "available": False,
+            "draft": None,
+        }
+
+    drafts = sorted(
+        TRAINING_PLAN_DIR.glob("????-??.json"),
+        reverse=True,
+    )
+
+    if not drafts:
+        return {
+            "available": False,
+            "draft": None,
+        }
+
+    draft_file = drafts[0]
+
+    try:
+        draft = json.loads(
+            draft_file.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        if draft.get("status") != "draft":
+            return {
+                "available": False,
+                "draft": None,
+            }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Training plan draft could not "
+                f"be read: {exc}"
+            ),
+        ) from exc
+
+    return {
+        "available": True,
+        "draft": draft,
+    }
+
+@app.post("/api/training-plan/draft/apply")
+def apply_training_plan_draft(
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    draft_dir = Path(
+        "/var/lib/pirowflo-control/training-plans"
+    )
+
+    drafts = sorted(
+        draft_dir.glob("????-??.json"),
+        reverse=True,
+    )
+
+    if not drafts:
+        raise HTTPException(
+            status_code=404,
+            detail="No training plan draft available",
+        )
+
+    draft_file = drafts[0]
+
+    try:
+        draft = json.loads(
+            draft_file.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        target_month = draft.get("target_month")
+
+        if not target_month:
+            raise RuntimeError(
+                "Draft has no target_month"
+            )
+
+        result = apply_training_plan(
+            target_month
+        )
+
+        return {
+            "success": True,
+            "target_month": target_month,
+            "status": result["status"],
+            "applied_at": result.get(
+                "applied_at"
+            ),
+            "created_events": len(
+                result.get(
+                    "applied_event_uids",
+                    [],
+                )
+            ),
+        }
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Training plan could not be "
+                f"applied: {exc}"
+            ),
+        ) from exc
+
 @app.get("/api/metrics")
 def metrics(x_api_key: str = Header(...)):
     require_api_key(x_api_key)
@@ -462,6 +624,59 @@ def start_mode(mode):
     )
 
     return result
+
+@app.post("/api/training-plan/generate")
+def generate_training_plan(
+    request: TrainingPlanRequest,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    try:
+        response = openai_client.responses.parse(
+            model="gpt-6-luna",
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Du erstellst Trainingspläne für Indoor-Rudern. "
+                        "Erstelle einen ausgewogenen Monatsplan. "
+                        "Die Trainingseinheiten werden als Ganztagstermine "
+                        "verwendet. Verwende ausschließlich Watt und SPM "
+                        "als Trainingsziele. "
+                        "warmup, work, recovery und cooldown müssen das "
+                        "PiRowFlo-Format verwenden, zum Beispiel "
+                        "'5m,80-90w' oder '40m,105-115w,16-18spm'. "
+                        "Plane Erholungstage zwischen intensiven Einheiten."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Erstelle einen Trainingsplan für "
+                        f"{request.month:02d}/{request.year} mit "
+                        f"{request.sessions_per_week} Einheiten pro Woche."
+                    ),
+                },
+            ],
+            text_format=TrainingPlan,
+        )
+
+        plan = response.output_parsed
+
+        if plan is None:
+            raise RuntimeError(
+                "OpenAI returned no structured training plan"
+            )
+
+        return plan
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Training plan generation failed: {exc}",
+        ) from exc
+
 
 @app.post("/api/start/{mode}")
 def start(mode: str, x_api_key: str = Header(...)):
