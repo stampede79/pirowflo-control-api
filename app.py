@@ -8,6 +8,30 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from pathlib import Path
 from training_plan_apply import apply_training_plan
+from training_plan_review_apply import (
+    apply_training_plan_review,
+)
+import json
+
+from sqlalchemy import select
+
+from database.engine import SessionLocal
+
+from database.models import (
+    Activity,
+    CoachRecommendation,
+    WeeklyReview,
+    MonthlyReview,
+    Workout,
+    WorkoutAnalysis,
+    AvailabilityPeriod,
+    WorkoutActivityLink,
+)
+from datetime import date, datetime
+from pydantic import BaseModel
+from workout_replanning_apply import (
+    apply_replanning_recommendation,
+)
 
 app = FastAPI(
     title="PiRowFlo Control API",
@@ -60,6 +84,10 @@ TRAINING_PLAN_DIR = Path(
     "/var/lib/pirowflo-control/training-plans"
 )
 
+TRAINING_REVIEW_DIR = Path(
+    "/var/lib/pirowflo-control/training-reviews"
+)
+
 
 def require_api_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
@@ -67,6 +95,12 @@ def require_api_key(x_api_key: str = Header(...)):
             status_code=401,
             detail="Invalid API key",
         )
+
+class AvailabilityResponse(BaseModel):
+    status: str
+
+class RecommendationDecision(BaseModel):
+    decision: str
 
 class TrainingPlanRequest(BaseModel):
     year: int = Field(ge=2026, le=2100)
@@ -426,6 +460,304 @@ def status(x_api_key: str = Header(...)):
         },
     }
 
+@app.post(
+    "/api/coach/recommendations/"
+    "{recommendation_id}/decision"
+)
+def decide_coach_recommendation(
+    recommendation_id: int,
+    request: RecommendationDecision,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    if request.decision not in {
+        "accept",
+        "reject",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid decision",
+        )
+
+    if request.decision == "accept":
+        try:
+            result = (
+                apply_replanning_recommendation(
+                    recommendation_id
+                )
+            )
+
+            return {
+                "success": True,
+                **result,
+            }
+
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+            ) from exc
+
+    with SessionLocal() as session:
+        recommendation = session.get(
+            CoachRecommendation,
+            recommendation_id,
+        )
+
+        if recommendation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Recommendation not found",
+            )
+
+        if (
+            recommendation.type
+            != "workout_replanning"
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Recommendation is not a "
+                    "workout replanning"
+                ),
+            )
+
+        if recommendation.status != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Recommendation has already "
+                    "been processed"
+                ),
+            )
+
+        recommendation.status = "rejected"
+        recommendation.rejected_at = (
+            datetime.now()
+        )
+
+        session.commit()
+
+        return {
+            "success": True,
+            "recommendation_id":
+                recommendation.id,
+            "status": "rejected",
+        }
+
+@app.get("/api/workouts/today")
+def get_today_workout(
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    today = datetime.now().date()
+
+    with SessionLocal() as session:
+        workouts = session.scalars(
+            select(Workout)
+            .where(
+                Workout.scheduled_date == today
+            )
+            .order_by(Workout.id)
+        ).all()
+
+        result = []
+
+        for workout in workouts:
+            link = session.scalar(
+                select(WorkoutActivityLink)
+                .where(
+                    WorkoutActivityLink.workout_id
+                    == workout.id
+                )
+                .order_by(
+                    WorkoutActivityLink.created_at.desc()
+                )
+            )
+
+            activity = None
+
+            if link is not None:
+                activity = session.get(
+                    Activity,
+                    link.activity_id,
+                )
+
+            activity_data = None
+
+            if activity is not None:
+                activity_data = {
+                    "endurain_activity_id":
+                        activity.endurain_activity_id,
+                    "duration_minutes": (
+                        round(
+                            activity.duration_seconds / 60,
+                            1,
+                        )
+                        if activity.duration_seconds
+                        is not None
+                        else None
+                    ),
+                    "distance_km": (
+                        round(
+                            activity.distance_meters / 1000,
+                            2,
+                        )
+                        if activity.distance_meters
+                        is not None
+                        else None
+                    ),
+                    "average_power":
+                        activity.average_power,
+                    "average_hr":
+                        activity.average_hr,
+                    "average_spm":
+                        activity.average_spm,
+                }
+
+            result.append(
+                {
+                    "id": workout.id,
+                    "date":
+                        workout.scheduled_date.isoformat(),
+                    "name": workout.name,
+                    "status": workout.status,
+                    "activity": activity_data,
+                }
+            )
+
+    return {
+        "date": today.isoformat(),
+        "workouts": result,
+    }
+
+@app.get("/api/training-plan/review")
+def get_training_plan_review(
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    if not TRAINING_REVIEW_DIR.exists():
+        return {
+            "available": False,
+            "review": None,
+        }
+
+    reviews = sorted(
+        TRAINING_REVIEW_DIR.glob("????-??.json"),
+        reverse=True,
+    )
+
+    if not reviews:
+        return {
+            "available": False,
+            "review": None,
+        }
+
+    review_file = reviews[0]
+
+    try:
+        review = json.loads(
+            review_file.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        if review.get("status") != "pending":
+            return {
+                "available": False,
+                "review": None,
+            }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Training plan review could not "
+                f"be read: {exc}"
+            ),
+        ) from exc
+
+    return {
+        "available": True,
+        "review": review,
+    }
+
+@app.post("/api/training-plan/review/apply")
+def apply_training_plan_review_endpoint(
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    review_dir = Path(
+        "/var/lib/pirowflo-control/training-reviews"
+    )
+
+    reviews = sorted(
+        review_dir.glob("????-??.json"),
+        reverse=True,
+    )
+
+    if not reviews:
+        raise HTTPException(
+            status_code=404,
+            detail="No training plan review available",
+        )
+
+    review_file = reviews[0]
+
+    try:
+        review_data = json.loads(
+            review_file.read_text(
+                encoding="utf-8",
+            )
+        )
+
+        target_month = review_data.get(
+            "target_month"
+        )
+
+        if not target_month:
+            raise RuntimeError(
+                "Review has no target_month"
+            )
+
+        result = apply_training_plan_review(
+            target_month
+        )
+
+        return {
+            "success": True,
+            "target_month": target_month,
+            "status": result["status"],
+            "applied_at": result.get(
+                "applied_at"
+            ),
+            "applied_changes": len(
+                result.get(
+                    "applied_changes",
+                    [],
+                )
+            ),
+        }
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Training plan review could not "
+                f"be applied: {exc}"
+            ),
+        ) from exc
+
 @app.get("/api/training-plan/draft")
 def get_training_plan_draft(
     x_api_key: str = Header(...),
@@ -548,6 +880,335 @@ def apply_training_plan_draft(
                 f"applied: {exc}"
             ),
         ) from exc
+
+@app.post(
+    "/api/coach/recommendations/"
+    "{recommendation_id}/decision"
+)
+def decide_coach_recommendation(
+    recommendation_id: int,
+    request: RecommendationDecision,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    if request.decision not in {
+        "accept",
+        "reject",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid decision",
+        )
+
+    with SessionLocal() as session:
+        recommendation = session.get(
+            CoachRecommendation,
+            recommendation_id,
+        )
+
+        if recommendation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Recommendation not found",
+            )
+
+        if recommendation.status != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Recommendation has already "
+                    "been processed"
+                ),
+            )
+
+        if (
+            recommendation.type
+            != "workout_replanning"
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Unsupported recommendation "
+                    "type"
+                ),
+            )
+
+        if request.decision == "reject":
+            recommendation.status = "rejected"
+            recommendation.rejected_at = (
+                datetime.now()
+            )
+
+            session.commit()
+
+            return {
+                "success": True,
+                "status": "rejected",
+            }
+
+        payload = json.loads(
+            recommendation.payload_json
+        )
+
+        workout = session.get(
+            Workout,
+            recommendation.workout_id,
+        )
+
+        if workout is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Workout not found",
+            )
+
+        target_date = date.fromisoformat(
+            payload["target_date"]
+        )
+
+        # Sicherheitsprüfung: Recommendation
+        # könnte inzwischen veraltet sein.
+        if (
+            workout.scheduled_date.isoformat()
+            != payload["original_date"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Workout has changed since "
+                    "recommendation was created"
+                ),
+            )
+
+        workout.scheduled_date = target_date
+
+        recommendation.status = "accepted"
+        recommendation.accepted_at = (
+            datetime.now()
+        )
+
+        session.commit()
+
+        return {
+            "success": True,
+            "status": "accepted",
+            "workout_id": workout.id,
+            "scheduled_date":
+                workout.scheduled_date.isoformat(),
+        }
+
+@app.get("/api/coach/overview")
+def coach_overview(
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    with SessionLocal() as session:
+        pending_rows = session.scalars(
+            select(CoachRecommendation)
+            .where(
+                CoachRecommendation.status
+                == "pending",
+            )
+            .order_by(
+                CoachRecommendation.created_at
+            )
+        ).all()
+
+        pending_recommendations = []
+
+        for recommendation in pending_rows:
+            try:
+                payload = json.loads(
+                    recommendation.payload_json
+                )
+            except json.JSONDecodeError:
+                payload = {}
+
+            pending_recommendations.append(
+                {
+                    "id": recommendation.id,
+                    "type": recommendation.type,
+                    "action": recommendation.action,
+                    "workout_id":
+                        recommendation.workout_id,
+                    "reason": recommendation.reason,
+                    "payload": payload,
+                }
+            )
+
+        weekly_review = session.scalar(
+            select(WeeklyReview)
+            .where(
+                WeeklyReview.input_fingerprint
+                != ""
+            )
+            .order_by(
+                WeeklyReview.year.desc(),
+                WeeklyReview.iso_week.desc(),
+                WeeklyReview.created_at.desc(),
+            )
+        )
+
+        monthly_review = session.scalar(
+            select(MonthlyReview)
+            .where(
+                MonthlyReview.input_fingerprint
+                != ""
+            )
+            .order_by(
+                MonthlyReview.year.desc(),
+                MonthlyReview.month.desc(),
+                MonthlyReview.created_at.desc(),
+            )
+        )
+
+        latest_analysis = session.execute(
+            select(
+                WorkoutAnalysis,
+                Workout,
+                Activity,
+            )
+            .join(
+                Workout,
+                WorkoutAnalysis.workout_id
+                == Workout.id,
+            )
+            .join(
+                Activity,
+                WorkoutAnalysis.activity_id
+                == Activity.id,
+            )
+            .where(
+                WorkoutAnalysis.prompt_version
+                == "2"
+            )
+            .order_by(
+                Activity.start_time.desc(),
+                WorkoutAnalysis.created_at.desc(),
+            )
+        ).first()
+
+        weekly_data = None
+
+        if weekly_review is not None:
+            details = json.loads(
+                weekly_review.review_json
+            )
+
+            weekly_data = {
+                "year":
+                    weekly_review.year,
+                "iso_week":
+                    weekly_review.iso_week,
+                "assessment":
+                    weekly_review.assessment,
+                "trend":
+                    weekly_review.trend,
+                "load_assessment":
+                    weekly_review.load_assessment,
+                "recovery_assessment":
+                    weekly_review.recovery_assessment,
+                "consistency":
+                    details.get("consistency"),
+                "key_observations":
+                    details.get(
+                        "key_observations",
+                        [],
+                    ),
+                "summary":
+                    weekly_review.summary,
+                "recommendation":
+                    details.get(
+                        "recommendation"
+                    ),
+            }
+
+        monthly_data = None
+
+        if monthly_review is not None:
+            details = json.loads(
+                monthly_review.review_json
+            )
+
+            monthly_data = {
+                "year":
+                    monthly_review.year,
+                "month":
+                    monthly_review.month,
+                "assessment":
+                    monthly_review.assessment,
+                "trend":
+                    monthly_review.trend,
+                "load_assessment":
+                    monthly_review.load_assessment,
+                "recovery_assessment":
+                    monthly_review.recovery_assessment,
+                "consistency":
+                    details.get("consistency"),
+                "progression":
+                    details.get("progression"),
+                "key_observations":
+                    details.get(
+                        "key_observations",
+                        [],
+                    ),
+                "strengths":
+                    details.get(
+                        "strengths",
+                        [],
+                    ),
+                "focus_areas":
+                    details.get(
+                        "focus_areas",
+                        [],
+                    ),
+                "summary":
+                    monthly_review.summary,
+                "recommendation":
+                    details.get(
+                        "recommendation"
+                    ),
+            }
+
+        workout_data = None
+
+        if latest_analysis is not None:
+            analysis, workout, activity = (
+                latest_analysis
+            )
+
+            workout_data = {
+                "date":
+                    workout.scheduled_date.isoformat(),
+                "name":
+                    workout.name,
+                "endurain_activity_id":
+                    activity.endurain_activity_id,
+                "execution":
+                    analysis.execution,
+                "load_assessment":
+                    analysis.load_assessment,
+                "effort":
+                    analysis.effort,
+                "progression":
+                    analysis.progression,
+                "recovery_concern":
+                    analysis.recovery_concern,
+                "summary":
+                    analysis.summary,
+                "recommendation":
+                    analysis.recommendation,
+            }
+
+        return {
+            "weekly_review": weekly_data,
+            "monthly_review": monthly_data,
+            "latest_workout_analysis":
+                workout_data,
+            "pending_recommendations":
+                pending_recommendations,
+        }
 
 @app.get("/api/metrics")
 def metrics(x_api_key: str = Header(...)):

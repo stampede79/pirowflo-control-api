@@ -1,9 +1,10 @@
 import html
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
+from urllib.parse import urljoin
 
 import httpx
 
@@ -187,6 +188,10 @@ class NextcloudCalendarClient:
                 ics,
                 "DTSTART",
             )
+            dtend = self._ics_value(
+                ics,
+                "DTEND",
+            )
             uid = self._ics_value(
                 ics,
                 "UID",
@@ -204,6 +209,16 @@ class NextcloudCalendarClient:
             except ValueError:
                 continue
 
+            end = None
+
+            if dtend is not None:
+                try:
+                    end, _ = self._parse_ics_datetime(
+                        dtend,
+                    )
+                except ValueError:
+                    end = None
+
             events.append(
                 {
                     "summary": summary,
@@ -211,6 +226,7 @@ class NextcloudCalendarClient:
                         description or "",
                     "start": start,
                     "all_day": all_day,
+                    "end": end,
                     "href": html.unescape(
                         href_node.text or ""
                     ),
@@ -231,6 +247,325 @@ class NextcloudCalendarClient:
         )
 
         return events
+
+    @staticmethod
+    def _escape_ics_text(
+        value: str,
+    ) -> str:
+        return (
+            value
+            .replace("\\", "\\\\")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .replace("\n", r"\n")
+            .replace(",", r"\,")
+            .replace(";", r"\;")
+        )
+    
+    @classmethod
+    def _replace_ics_description(
+        cls,
+        ics: str,
+        description: str,
+    ) -> str:
+        escaped = cls._escape_ics_text(
+            description
+        )
+
+        # Nur DESCRIPTION inklusive eventuell
+        # gefalteter Folgezeilen ersetzen.
+        pattern = re.compile(
+            r"^DESCRIPTION(?:;[^:]*)?:.*"
+            r"(?:\r?\n[ \t].*)*",
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+        replacement = (
+            f"DESCRIPTION:{escaped}"
+        )
+
+        if pattern.search(ics):
+            return pattern.sub(
+                lambda _: replacement,
+                ics,
+                count=1,
+            )
+
+        # DESCRIPTION fehlt vollständig.
+        marker = "END:VEVENT"
+
+        if marker not in ics:
+            raise NextcloudCalendarError(
+                "Calendar event has no VEVENT"
+            )
+
+        newline = (
+            "\r\n"
+            if "\r\n" in ics
+            else "\n"
+        )
+
+        return ics.replace(
+            marker,
+            (
+                f"DESCRIPTION:{escaped}"
+                f"{newline}"
+                f"{marker}"
+            ),
+            1,
+        )
+
+    @classmethod
+    def _replace_ics_date(
+        cls,
+        ics: str,
+        new_date: datetime,
+    ) -> str:
+        date_value = new_date.strftime(
+            "%Y%m%d"
+        )
+
+        next_day = (
+            new_date
+            + timedelta(days=1)
+        ).strftime("%Y%m%d")
+
+        unfolded = cls._unfold_ics(ics)
+
+        start_pattern = re.compile(
+            r"^DTSTART(?:;[^:]*)?:.*$",
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+        end_pattern = re.compile(
+            r"^DTEND(?:;[^:]*)?:.*$",
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+        if not start_pattern.search(unfolded):
+            raise NextcloudCalendarError(
+                "Calendar event has no DTSTART"
+            )
+
+        updated = start_pattern.sub(
+            f"DTSTART;VALUE=DATE:{date_value}",
+            unfolded,
+            count=1,
+        )
+
+        if end_pattern.search(updated):
+            updated = end_pattern.sub(
+                f"DTEND;VALUE=DATE:{next_day}",
+                updated,
+                count=1,
+            )
+        else:
+            marker = "END:VEVENT"
+
+            if marker not in updated:
+                raise NextcloudCalendarError(
+                    "Calendar event has no VEVENT"
+                )
+
+            newline = (
+                "\r\n"
+                if "\r\n" in updated
+                else "\n"
+            )
+
+            updated = updated.replace(
+                marker,
+                (
+                    f"DTEND;VALUE=DATE:{next_day}"
+                    f"{newline}"
+                    f"{marker}"
+                ),
+                1,
+            )
+
+        return updated
+
+    def update_event_description(
+        self,
+        event: dict[str, Any],
+        description: str,
+    ) -> None:
+        href = event.get("href")
+        etag = event.get("etag")
+        raw_ics = event.get("raw_ics")
+
+        if not href:
+            raise NextcloudCalendarError(
+                "Calendar event has no href"
+            )
+
+        if not etag:
+            raise NextcloudCalendarError(
+                "Calendar event has no ETag"
+            )
+
+        if not raw_ics:
+            raise NextcloudCalendarError(
+                "Calendar event has no raw ICS"
+            )
+
+        updated_ics = (
+            self._replace_ics_description(
+                raw_ics,
+                description,
+            )
+        )
+
+        if (
+            href.startswith("http://")
+            or href.startswith("https://")
+        ):
+            event_url = href
+        else:
+            event_url = urljoin(
+                self.calendar_url,
+                href,
+            )
+
+        response = httpx.put(
+            event_url,
+            auth=(
+                self.username,
+                self.app_password,
+            ),
+            headers={
+                "Content-Type":
+                    "text/calendar; charset=utf-8",
+                "If-Match": etag,
+            },
+            content=updated_ics.encode("utf-8"),
+            timeout=15,
+        )
+
+        if response.status_code not in {
+            200,
+            201,
+            204,
+        }:
+            raise NextcloudCalendarError(
+                "Could not update calendar event "
+                f"(HTTP {response.status_code}): "
+                f"{response.text}"
+            )
+
+    def update_event_date(
+        self,
+        event: dict[str, Any],
+        new_date: datetime,
+    ) -> None:
+        href = event.get("href")
+        etag = event.get("etag")
+        raw_ics = event.get("raw_ics")
+
+        if not href:
+            raise NextcloudCalendarError(
+                "Calendar event has no href"
+            )
+
+        if not etag:
+            raise NextcloudCalendarError(
+                "Calendar event has no ETag"
+            )
+
+        if not raw_ics:
+            raise NextcloudCalendarError(
+                "Calendar event has no raw ICS"
+            )
+
+        updated_ics = self._replace_ics_date(
+            raw_ics,
+            new_date,
+        )
+
+        if (
+            href.startswith("http://")
+            or href.startswith("https://")
+        ):
+            event_url = href
+        else:
+            event_url = urljoin(
+                self.calendar_url,
+                href,
+            )
+
+        response = httpx.put(
+            event_url,
+            auth=(
+                self.username,
+                self.app_password,
+            ),
+            headers={
+                "Content-Type":
+                    "text/calendar; charset=utf-8",
+                "If-Match": etag,
+            },
+            content=updated_ics.encode("utf-8"),
+            timeout=15,
+        )
+
+        if response.status_code not in {
+            200,
+            201,
+            204,
+        }:
+            raise NextcloudCalendarError(
+                "Could not move calendar event "
+                f"(HTTP {response.status_code}): "
+                f"{response.text}"
+            )
+
+    def delete_event(
+        self,
+        event: dict[str, Any],
+    ) -> None:
+        href = event.get("href")
+        etag = event.get("etag")
+
+        if not href:
+            raise NextcloudCalendarError(
+                "Calendar event has no href"
+            )
+
+        if not etag:
+            raise NextcloudCalendarError(
+                "Calendar event has no ETag"
+            )
+
+        if href.startswith("http://") or \
+                href.startswith("https://"):
+            event_url = href
+        else:
+            event_url = urljoin(
+                self.calendar_url,
+                href,
+            )
+
+        response = httpx.delete(
+            event_url,
+            auth=(
+                self.username,
+                self.app_password,
+            ),
+            headers={
+                "If-Match": etag,
+            },
+            timeout=15,
+        )
+
+        if response.status_code not in {
+            200,
+            204,
+        }:
+            raise NextcloudCalendarError(
+                "Could not delete calendar event "
+                f"(HTTP {response.status_code}): "
+                f"{response.text}"
+            )
 
     def create_event(
         self,

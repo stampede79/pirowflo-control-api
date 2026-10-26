@@ -34,6 +34,102 @@ class EndurainClient:
 
         self._load_session()
 
+    def get_activity_streams(
+        self,
+        activity_id: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        response = self.get(
+            "/activities_streams/"
+            f"activity_id/{activity_id}/all"
+        )
+
+        if response.status_code != 200:
+            raise EndurainError(
+                "Could not load Endurain streams "
+                f"(HTTP {response.status_code}): "
+                f"{response.text}"
+            )
+
+        data = response.json()
+
+        if not isinstance(data, list):
+            raise EndurainError(
+                "Unexpected Endurain streams response"
+            )
+
+        result: dict[
+            str,
+            list[dict[str, Any]],
+        ] = {
+            "heart_rate": [],
+            "power": [],
+            "cadence": [],
+        }
+
+        stream_mapping = {
+            1: ("heart_rate", "hr"),
+            2: ("power", "power"),
+            3: ("cadence", "cad"),
+        }
+
+        for stream in data:
+            stream_type = stream.get(
+                "stream_type"
+            )
+
+            mapping = stream_mapping.get(
+                stream_type
+            )
+
+            if mapping is None:
+                continue
+
+            result_name, value_name = mapping
+
+            waypoints = stream.get(
+                "stream_waypoints"
+            )
+
+            if not isinstance(
+                waypoints,
+                list,
+            ):
+                continue
+
+            for waypoint in waypoints:
+                if not isinstance(
+                    waypoint,
+                    dict,
+                ):
+                    continue
+
+                raw_time = waypoint.get("time")
+                raw_value = waypoint.get(
+                    value_name
+                )
+
+                if (
+                    raw_time is None
+                    or not isinstance(
+                        raw_value,
+                        (int, float),
+                    )
+                ):
+                    continue
+
+                result[result_name].append(
+                    {
+                        "time":
+                            datetime.fromisoformat(
+                                raw_time
+                            ),
+                        "value":
+                            float(raw_value),
+                    }
+                )
+
+        return result
+        
     def _load_session(self) -> None:
         if not self.session_file.exists():
             return

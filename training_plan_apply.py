@@ -5,6 +5,20 @@ from pathlib import Path
 from typing import Any
 
 from nextcloud_calendar_client import NextcloudCalendarClient
+from sqlalchemy import select
+
+from database.engine import SessionLocal
+from database.models import (
+    CalendarSync,
+    TrainingPlan as TrainingPlanModel,
+    Workout,
+)
+from monthly_planning_context import (
+    build_monthly_planning_input,
+)
+from monthly_training_planner import (
+    _input_fingerprint,
+)
 
 
 
@@ -12,6 +26,208 @@ DRAFT_DIR = Path(
     "/var/lib/pirowflo-control/training-plans"
 )
 
+def _validate_draft_fingerprint(
+    draft: dict[str, Any],
+) -> None:
+    target_month = draft.get(
+        "target_month"
+    )
+
+    stored_fingerprint = draft.get(
+        "input_fingerprint"
+    )
+
+    if not target_month:
+        raise RuntimeError(
+            "Draft has no target_month"
+        )
+
+    if not stored_fingerprint:
+        raise RuntimeError(
+            "Draft has no input_fingerprint"
+        )
+
+    year, month = map(
+        int,
+        target_month.split("-"),
+    )
+
+    current_context = (
+        build_monthly_planning_input(
+            target_year=year,
+            target_month=month,
+        )
+    )
+
+    current_fingerprint = (
+        _input_fingerprint(
+            current_context
+        )
+    )
+
+    if (
+        current_fingerprint
+        != stored_fingerprint
+    ):
+        raise RuntimeError(
+            "Training plan draft is stale. "
+            "Planning context has changed."
+        )
+
+def _get_calendar_events(
+    client: NextcloudCalendarClient,
+    target_month: str,
+) -> dict[str, dict[str, Any]]:
+    year, month = map(
+        int,
+        target_month.split("-"),
+    )
+
+    start = datetime(
+        year,
+        month,
+        1,
+    )
+
+    if month == 12:
+        end = datetime(
+            year + 1,
+            1,
+            1,
+        )
+    else:
+        end = datetime(
+            year,
+            month + 1,
+            1,
+        )
+
+    events = client.get_events_for_range(
+        start,
+        end,
+    )
+
+    return {
+        event["uid"]: event
+        for event in events
+        if event.get("uid")
+    }
+
+def _persist_training_plan(
+    *,
+    draft: dict[str, Any],
+    calendar_events: dict[
+        str,
+        dict[str, Any],
+    ],
+) -> int:
+    target_month = draft["target_month"]
+
+    year, month = map(
+        int,
+        target_month.split("-"),
+    )
+
+    with SessionLocal() as session:
+        existing = session.scalar(
+            select(TrainingPlanModel)
+            .where(
+                TrainingPlanModel.year == year,
+                TrainingPlanModel.month == month,
+            )
+        )
+
+        if existing is not None:
+            raise RuntimeError(
+                "Training plan already exists "
+                f"for {target_month}"
+            )
+
+        now = datetime.now()
+
+        plan = TrainingPlanModel(
+            year=year,
+            month=month,
+            status="active",
+            sessions_per_week=draft.get(
+                "sessions_per_week"
+            ),
+            source="ai",
+            approved_at=now,
+        )
+
+        session.add(plan)
+        session.flush()
+
+        for item in draft["workouts"]:
+            workout = Workout(
+                training_plan_id=plan.id,
+                scheduled_date=(
+                    datetime.fromisoformat(
+                        item["date"]
+                    ).date()
+                ),
+                name=item["name"],
+                description=item.get(
+                    "description",
+                    "",
+                ),
+                status="planned",
+                warmup=item.get("warmup"),
+                repeat=item.get(
+                    "repeat",
+                    1,
+                ),
+                work=item["work"],
+                recovery=item.get(
+                    "recovery"
+                ),
+                cooldown=item.get(
+                    "cooldown"
+                ),
+            )
+
+            session.add(workout)
+            session.flush()
+
+            uid = (
+                "pirowflo-plan-"
+                f"{target_month}-"
+                f'{item["date"]}'
+                "@pirowflo"
+            )
+
+            event = calendar_events.get(
+                uid
+            )
+
+            if event is None:
+                session.rollback()
+
+                raise RuntimeError(
+                    "Created calendar event "
+                    "could not be found: "
+                    f"{uid}"
+                )
+
+            session.add(
+                CalendarSync(
+                    workout_id=workout.id,
+                    calendar_uid=uid,
+                    calendar_href=event.get(
+                        "href"
+                    ),
+                    calendar_etag=event.get(
+                        "etag"
+                    ),
+                    sync_status="synced",
+                    last_synced_at=now,
+                )
+            )
+
+        session.commit()
+
+        return plan.id
 
 def _build_description(
     workout: dict[str, Any],
@@ -263,6 +479,30 @@ def apply_training_plan(
             "requested target month"
         )
 
+    _validate_draft_fingerprint(
+        draft
+    )
+
+    year, month = map(
+        int,
+        target_month.split("-"),
+    )
+
+    with SessionLocal() as session:
+        existing_plan = session.scalar(
+            select(TrainingPlanModel)
+            .where(
+                TrainingPlanModel.year == year,
+                TrainingPlanModel.month == month,
+            )
+        )
+
+        if existing_plan is not None:
+            raise RuntimeError(
+                "Training plan already exists "
+                f"for {target_month}"
+            )
+
     client = NextcloudCalendarClient(
         calendar_url=os.environ[
             "NEXTCLOUD_CALENDAR_URL"
@@ -344,10 +584,21 @@ def apply_training_plan(
             draft,
         )
 
+        calendar_events = _get_calendar_events(
+        client,
+        target_month,
+    )
+
+    plan_id = _persist_training_plan(
+        draft=draft,
+        calendar_events=calendar_events,
+    )
+
     draft["status"] = "applied"
     draft["applied_at"] = (
         datetime.now().isoformat()
     )
+    draft["training_plan_id"] = plan_id
 
     draft["applied_event_uids"] = sorted(
         applied_event_uids
