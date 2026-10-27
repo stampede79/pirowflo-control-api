@@ -246,6 +246,16 @@ bewertet werden.
 status=skipped bedeutet, dass das Training bewusst
 ausgelassen wurde.
 
+status=missed bedeutet, dass der Trainingstermin
+bereits vergangen ist und keine passende Aktivität
+gefunden wurde. Das Training gilt als nicht
+absolviert.
+
+Berücksichtige missed Trainings bei der Beurteilung
+der bisherigen Planumsetzung. Einzelne missed
+Trainings allein rechtfertigen jedoch keine
+grundlegende Änderung der Trainingssteuerung.
+
 Nutze die vorhandenen Workout-Analysen stärker als
 bloße Durchschnittswerte.
 

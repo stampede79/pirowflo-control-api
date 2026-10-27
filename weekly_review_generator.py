@@ -87,6 +87,7 @@ def build_weekly_review_input(
 
         completed = 0
         skipped = 0
+        missed = 0
         planned = 0
 
         for workout in workouts:
@@ -94,6 +95,8 @@ def build_weekly_review_input(
                 completed += 1
             elif workout.status == "skipped":
                 skipped += 1
+            elif workout.status == "missed":
+                missed += 1
             elif workout.status == "planned":
                 planned += 1
 
@@ -101,9 +104,10 @@ def build_weekly_review_input(
                 select(WorkoutActivityLink)
                 .where(
                     WorkoutActivityLink.workout_id
-                    == workout.id,
-                    WorkoutActivityLink.status
-                    == "confirmed",
+                    == workout.id
+                )
+                .order_by(
+                    WorkoutActivityLink.created_at.desc()
                 )
             )
 
@@ -238,6 +242,8 @@ def build_weekly_review_input(
                     completed,
                 "skipped_workouts":
                     skipped,
+                "missed_workouts":
+                    missed,
                 "open_workouts":
                     planned,
                 "total_duration_minutes":
@@ -335,6 +341,22 @@ verglichen werden.
 Nimm keine Änderungen am Trainingsplan vor.
 Empfehlungen sind Hinweise für die weitere
 Trainingssteuerung.
+
+Workout-Status:
+
+- completed: Training wurde absolviert.
+- planned: Training steht noch aus. Nicht als
+  ausgelassen bewerten.
+- skipped: Training wurde bewusst ausgelassen
+  oder aus dem Plan genommen.
+- missed: Der Trainingstermin ist vergangen und
+  es wurde keine passende Aktivität gefunden.
+  Dies gilt als nicht absolviertes Plantraining.
+
+Berücksichtige missed Workouts bei der Bewertung
+der Umsetzung des Trainingsplans. Ein einzelnes
+missed Workout rechtfertigt jedoch nicht automatisch
+eine grundlegende Änderung des Trainingsplans.
 
 assessment:
 - good

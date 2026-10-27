@@ -8,7 +8,8 @@ from database.models import (
 from database.repositories.activity_repository import (
     ActivityRepository,
 )
-from datetime import date
+from datetime import date, timedelta
+
 
 def link_workout_to_activity(
     workout_id: int,
@@ -93,6 +94,7 @@ def link_open_workouts() -> dict:
     created = []
     ambiguous = []
     unmatched = []
+    missed = []
 
     with SessionLocal() as session:
         activity_repository = (
@@ -144,14 +146,29 @@ def link_open_workouts() -> dict:
             ]
 
             if not candidates:
-                unmatched.append(
-                    {
-                        "workout_id": workout.id,
-                        "date":
-                            workout.scheduled_date,
-                        "name": workout.name,
-                    }
-                )
+                missed_before = date.today() - timedelta(days=1)
+
+                if workout.scheduled_date < missed_before:
+                    workout.status = "missed"
+
+                    missed.append(
+                        {
+                            "workout_id": workout.id,
+                            "date":
+                                workout.scheduled_date,
+                            "name": workout.name,
+                        }
+                    )
+                else:
+                    unmatched.append(
+                        {
+                            "workout_id": workout.id,
+                            "date":
+                                workout.scheduled_date,
+                            "name": workout.name,
+                        }
+                    )
+
                 continue
 
             if len(candidates) > 1:
@@ -203,4 +220,5 @@ def link_open_workouts() -> dict:
         "created": created,
         "ambiguous": ambiguous,
         "unmatched": unmatched,
+        "missed": missed,
     }

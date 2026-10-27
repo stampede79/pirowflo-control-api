@@ -147,6 +147,17 @@ def run_pipeline() -> dict:
         "   Ohne Match:",
         len(link_result["unmatched"]),
     )
+    print(
+        "   Neu als missed:",
+        len(link_result["missed"]),
+    )
+
+    for item in link_result["missed"]:
+        print(
+            "   ! Workout #"
+            f"{item['workout_id']}"
+            " -> missed"
+        )
 
     for item in link_result["created"]:
         print(
