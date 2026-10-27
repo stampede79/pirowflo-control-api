@@ -36,6 +36,9 @@ from workout_api import serialize_workout
 from workout_activity_linker import (
     link_workout_to_activity,
 )
+from training_history import (
+    build_training_history,
+)
 
 app = FastAPI(
     title="PiRowFlo Control API",
@@ -587,6 +590,25 @@ def decide_coach_recommendation(
                 recommendation.id,
             "status": "rejected",
         }
+
+@app.get("/api/training-history")
+def get_training_history(
+    start: date,
+    end: date,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    if end <= start:
+        raise HTTPException(
+            status_code=400,
+            detail="end must be after start",
+        )
+
+    return build_training_history(
+        start=start,
+        end=end,
+    )
 
 @app.get("/api/workouts")
 def get_workouts(

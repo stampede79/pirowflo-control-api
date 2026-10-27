@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -83,6 +81,16 @@ class ActivityRepository:
 
         end = start + timedelta(days=1)
 
+        return self.get_for_range(
+            start,
+            end,
+        )
+
+    def get_for_range(
+        self,
+        start: datetime,
+        end: datetime,
+    ) -> list[Activity]:
         return list(
             self.session.scalars(
                 select(Activity)
