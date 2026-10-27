@@ -10,6 +10,85 @@ from database.repositories.activity_repository import (
 )
 from datetime import date
 
+def link_workout_to_activity(
+    workout_id: int,
+    endurain_activity_id: int,
+) -> dict:
+    with SessionLocal() as session:
+        workout = session.get(
+            Workout,
+            workout_id,
+        )
+
+        if workout is None:
+            raise ValueError(
+                "Workout not found"
+            )
+
+        activity_repository = (
+            ActivityRepository(session)
+        )
+
+        activity = (
+            activity_repository
+            .get_by_endurain_id(
+                endurain_activity_id
+            )
+        )
+
+        if activity is None:
+            raise ValueError(
+                "Activity not found"
+            )
+
+        existing_workout_link = session.scalar(
+            select(WorkoutActivityLink)
+            .where(
+                WorkoutActivityLink.workout_id
+                == workout.id
+            )
+        )
+
+        if existing_workout_link is not None:
+            raise ValueError(
+                "Workout already linked"
+            )
+
+        existing_activity_link = session.scalar(
+            select(WorkoutActivityLink)
+            .where(
+                WorkoutActivityLink.activity_id
+                == activity.id
+            )
+        )
+
+        if existing_activity_link is not None:
+            raise ValueError(
+                "Activity already linked"
+            )
+
+        link = WorkoutActivityLink(
+            workout_id=workout.id,
+            activity_id=activity.id,
+            status="confirmed",
+            match_score=1.0,
+        )
+
+        session.add(link)
+
+        workout.status = "completed"
+
+        session.commit()
+
+        return {
+            "workout_id":
+                workout.id,
+            "endurain_activity_id":
+                activity.endurain_activity_id,
+            "status":
+                "confirmed",
+        }
+
 def link_open_workouts() -> dict:
     created = []
     ambiguous = []

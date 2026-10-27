@@ -32,6 +32,10 @@ from pydantic import BaseModel
 from workout_replanning_apply import (
     apply_replanning_recommendation,
 )
+from workout_api import serialize_workout
+from workout_activity_linker import (
+    link_workout_to_activity,
+)
 
 app = FastAPI(
     title="PiRowFlo Control API",
@@ -123,6 +127,9 @@ class TrainingPlan(BaseModel):
     year: int
     month: int
     workouts: list[TrainingPlanWorkout]
+
+class WorkoutActivityLinkRequest(BaseModel):
+    endurain_activity_id: int
 
 def get_smartrow_adapter_status():
     result = {
@@ -461,6 +468,41 @@ def status(x_api_key: str = Header(...)):
     }
 
 @app.post(
+    "/api/workouts/{workout_id}/activity-link"
+)
+def link_workout_activity(
+    workout_id: int,
+    request: WorkoutActivityLinkRequest,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    try:
+        result = link_workout_to_activity(
+            workout_id=workout_id,
+            endurain_activity_id=(
+                request.endurain_activity_id
+            ),
+        )
+    except ValueError as exc:
+        message = str(exc)
+
+        if message in {
+            "Workout not found",
+            "Activity not found",
+        }:
+            status_code = 404
+        else:
+            status_code = 409
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=message,
+        ) from exc
+
+    return result
+
+@app.post(
     "/api/coach/recommendations/"
     "{recommendation_id}/decision"
 )
@@ -546,6 +588,45 @@ def decide_coach_recommendation(
             "status": "rejected",
         }
 
+@app.get("/api/workouts")
+def get_workouts(
+    start: date,
+    end: date,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    if end <= start:
+        raise HTTPException(
+            status_code=400,
+            detail="end must be after start",
+        )
+
+    with SessionLocal() as session:
+        workouts = session.scalars(
+            select(Workout)
+            .where(
+                Workout.scheduled_date >= start,
+                Workout.scheduled_date < end,
+            )
+            .order_by(
+                Workout.scheduled_date,
+                Workout.id,
+            )
+        ).all()
+
+        return {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "workouts": [
+                serialize_workout(
+                    session,
+                    workout,
+                )
+                for workout in workouts
+            ],
+        }
+
 @app.get("/api/workouts/today")
 def get_today_workout(
     x_api_key: str = Header(...),
@@ -563,75 +644,16 @@ def get_today_workout(
             .order_by(Workout.id)
         ).all()
 
-        result = []
-
-        for workout in workouts:
-            link = session.scalar(
-                select(WorkoutActivityLink)
-                .where(
-                    WorkoutActivityLink.workout_id
-                    == workout.id
+        return {
+            "date": today.isoformat(),
+            "workouts": [
+                serialize_workout(
+                    session,
+                    workout,
                 )
-                .order_by(
-                    WorkoutActivityLink.created_at.desc()
-                )
-            )
-
-            activity = None
-
-            if link is not None:
-                activity = session.get(
-                    Activity,
-                    link.activity_id,
-                )
-
-            activity_data = None
-
-            if activity is not None:
-                activity_data = {
-                    "endurain_activity_id":
-                        activity.endurain_activity_id,
-                    "duration_minutes": (
-                        round(
-                            activity.duration_seconds / 60,
-                            1,
-                        )
-                        if activity.duration_seconds
-                        is not None
-                        else None
-                    ),
-                    "distance_km": (
-                        round(
-                            activity.distance_meters / 1000,
-                            2,
-                        )
-                        if activity.distance_meters
-                        is not None
-                        else None
-                    ),
-                    "average_power":
-                        activity.average_power,
-                    "average_hr":
-                        activity.average_hr,
-                    "average_spm":
-                        activity.average_spm,
-                }
-
-            result.append(
-                {
-                    "id": workout.id,
-                    "date":
-                        workout.scheduled_date.isoformat(),
-                    "name": workout.name,
-                    "status": workout.status,
-                    "activity": activity_data,
-                }
-            )
-
-    return {
-        "date": today.isoformat(),
-        "workouts": result,
-    }
+                for workout in workouts
+            ],
+        }
 
 @app.get("/api/training-plan/review")
 def get_training_plan_review(
