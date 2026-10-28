@@ -1,6 +1,7 @@
 import json
 import os
 
+from datetime import datetime
 from openai import OpenAI
 from pydantic import BaseModel
 
@@ -16,9 +17,12 @@ from workout_phase_analyzer import (
 from stream_signal_quality import (
     clean_activity_streams,
 )
+from recovery_context import (
+    build_recovery_context,
+)
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "4"
+PROMPT_VERSION = "5"
 
 
 class WorkoutAnalysisResult(BaseModel):
@@ -85,6 +89,19 @@ def build_detailed_workout_analysis_input(
     streams = cleaned.streams
 
     planned = data["planned_workout"]
+
+    sleep_records = client.get_sleep_records()
+
+    workout_date = datetime.fromisoformat(
+        planned["date"]
+    ).date()
+
+    data["recovery_context"] = (
+        build_recovery_context(
+            sleep_records,
+            workout_date,
+        )
+    )
 
     data["data_quality"] = {
         name: {
@@ -344,11 +361,6 @@ dürfen zur Beurteilung der kardiovaskulären
 Belastungsentwicklung innerhalb der Einheit
 herangezogen werden.
 
-first_half_average_hr und second_half_average_hr
-dürfen zur Beurteilung der kardiovaskulären
-Belastungsentwicklung innerhalb der Einheit
-herangezogen werden.
-
 heart_rate_drift_bpm und heart_rate_drift_percent
 beschreiben die Veränderung der Herzfrequenz zwischen
 der ersten und zweiten Hälfte einer Phase.
@@ -410,9 +422,68 @@ unzureichende Regeneration.
 Ein nicht-monotoner Verlauf einzelner Recovery-Werte
 reicht dafür nicht aus.
 
-power_in_target_percent basiert auf sekündlicher
-Instantanleistung. Bei einem engen Watt-Zielbereich
-...
+RECOVERY_CONTEXT enthält Gesundheits- und
+Erholungsdaten aus der Nacht vor dem Training sowie
+persönliche Baselines aus vorherigen Tagen.
+
+Diese Daten sind zusätzlicher Trainingskontext und
+keine medizinische Diagnose.
+
+sleep.duration_minutes beschreibt die Schlafdauer
+der Nacht vor dem Training.
+sleep.baseline_7d_minutes beschreibt die persönliche
+Schlaf-Baseline der vorherigen sieben Kalendertage.
+sleep.deviation_minutes beschreibt die Abweichung
+davon.
+
+sleep.score ist der aktuelle Sleep Score.
+sleep.score_baseline_7d ist die persönliche
+7-Tage-Baseline dieses Scores.
+
+resting_heart_rate.bpm ist der aktuelle Ruhepuls.
+resting_heart_rate.baseline_28d_bpm ist die
+persönliche 28-Tage-Baseline.
+resting_heart_rate.deviation_bpm beschreibt die
+Abweichung davon.
+
+hrv.status ist ein vom Quellsystem bereitgestellter
+HRV-Status. LOW oder UNBALANCED darf NICHT isoliert
+als Hinweis auf unzureichende Regeneration gewertet
+werden. Berücksichtige, dass ein solcher Status auch
+Teil des persönlichen längerfristigen Verlaufs sein
+kann.
+
+sleep_stress.value ist der Schlaf-Stresswert.
+sleep_stress.baseline_7d ist die persönliche
+7-Tage-Baseline und sleep_stress.deviation die
+Abweichung davon.
+
+Bewerte Recovery-Werte primär relativ zu den
+persönlichen Baselines und nicht anhand allgemeiner
+pauschaler Grenzwerte.
+
+Ein einzelner schlechter Schlafwert, ein niedriger
+Sleep Score, ein erhöhter Ruhepuls, ein HRV-Status
+LOW oder UNBALANCED oder ein auffälliger
+Sleep-Stresswert darf allein NICHT zu
+recovery_concern=true führen.
+
+recovery_concern aufgrund des RECOVERY_CONTEXT
+erfordert mehrere übereinstimmende auffällige
+Recovery-Signale oder ein auffälliges Recovery-Signal
+zusammen mit einer dazu passenden auffälligen
+Trainingsreaktion.
+
+Eine normale oder gute Trainingsausführung, stabile
+Leistung und unauffällige Herzfrequenzerholung dürfen
+als gegenläufige Evidenz berücksichtigt werden.
+
+Wenn RECOVERY_CONTEXT fehlt oder einzelne Werte null
+sind, dürfen daraus keine negativen Schlussfolgerungen
+gezogen werden.
+
+Formuliere aus Schlaf-, HRV-, Ruhepuls- oder
+Stressdaten keine medizinischen Diagnosen.
 
 power_in_target_percent basiert auf sekündlicher
 Instantanleistung. Bei einem engen Watt-Zielbereich

@@ -279,6 +279,41 @@ class EndurainClient:
 
         return request()
 
+    def get_sleep_records(
+        self,
+    ) -> list[dict[str, Any]]:
+        response = self.get(
+            "/health/sleep"
+        )
+
+        if response.status_code != 200:
+            raise EndurainError(
+                "Could not load Endurain sleep data "
+                f"(HTTP {response.status_code}): "
+                f"{response.text}"
+            )
+
+        data = response.json()
+
+        if not isinstance(data, dict):
+            raise EndurainError(
+                "Unexpected Endurain sleep response"
+            )
+
+        records = data.get("records")
+
+        if not isinstance(records, list):
+            raise EndurainError(
+                "Unexpected Endurain sleep records"
+            )
+
+        return [
+            record
+            for record in records
+            if isinstance(record, dict)
+        ]
+
+
     def get_rowing_activities_for_range(
         self,
         start: datetime,
