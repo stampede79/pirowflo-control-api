@@ -107,6 +107,45 @@ def _average(
         1,
     )
 
+def _average_for_range(
+    points: list[dict[str, Any]],
+    stream_start: datetime,
+    start_seconds: int,
+    end_seconds: int,
+) -> float | None:
+    return _average(
+        _values_for_range(
+            points,
+            stream_start,
+            start_seconds,
+            end_seconds,
+        )
+    )
+
+
+def _max_rolling_average(
+    values: list[float],
+    window_size: int = 5,
+) -> float | None:
+    if not values:
+        return None
+
+    if len(values) < window_size:
+        return _average(values)
+
+    averages = [
+        mean(
+            values[
+                index:index + window_size
+            ]
+        )
+        for index in range(
+            len(values) - window_size + 1
+        )
+    ]
+
+    return round(max(averages), 1)
+
 def _split_half(
     values: list[float],
 ) -> tuple[list[float], list[float]]:
@@ -165,6 +204,91 @@ def _phase_metrics(
         _split_half(cadence)
     )
 
+    first_half_power = _average(
+        power_first
+    )
+    second_half_power = _average(
+        power_second
+    )
+
+    first_half_hr = _average(
+        hr_first
+    )
+    second_half_hr = _average(
+        hr_second
+    )
+
+    power_change_watts = (
+        round(
+            second_half_power
+            - first_half_power,
+            1,
+        )
+        if (
+            first_half_power is not None
+            and second_half_power is not None
+        )
+        else None
+    )
+    power_change_percent = (
+        round(
+            power_change_watts
+            / first_half_power
+            * 100,
+            1,
+        )
+        if (
+            power_change_watts is not None
+            and first_half_power is not None
+            and first_half_power > 0
+        )
+        else None
+    )
+
+    heart_rate_drift_bpm = (
+        round(
+            second_half_hr
+            - first_half_hr,
+            1,
+        )
+        if (
+            first_half_hr is not None
+            and second_half_hr is not None
+        )
+        else None
+    )
+
+    heart_rate_drift_percent = (
+        round(
+            heart_rate_drift_bpm
+            / first_half_hr
+            * 100,
+            1,
+        )
+        if (
+            heart_rate_drift_bpm is not None
+            and first_half_hr is not None
+            and first_half_hr > 0
+        )
+        else None
+    )
+
+    is_work_phase = (
+    name == "work"
+    or name.startswith("work_")
+)
+
+    heart_rate_drift_interpretable = (
+        is_work_phase
+        and end_seconds - start_seconds >= 600
+        and first_half_power is not None
+        and second_half_power is not None
+        and first_half_hr is not None
+        and second_half_hr is not None
+        and power_change_percent is not None
+        and abs(power_change_percent) <= 5.0
+    )
+
     result: dict[str, Any] = {
         "name": name,
         "start_seconds": start_seconds,
@@ -183,15 +307,25 @@ def _phase_metrics(
         "average_spm":
             _average(cadence),
         "first_half_average_power":
-    _average(power_first),
-    "second_half_average_power":
-        _average(power_second),
+            first_half_power,
+        "second_half_average_power":
+            second_half_power,
 
-    "first_half_average_hr":
-        _average(hr_first),
-    "second_half_average_hr":
-        _average(hr_second),
+        "first_half_average_hr":
+            first_half_hr,
+        "second_half_average_hr":
+            second_half_hr,
 
+        "power_change_watts":
+    power_change_watts,
+"power_change_percent":
+    power_change_percent,
+"heart_rate_drift_bpm":
+    heart_rate_drift_bpm,
+"heart_rate_drift_percent":
+    heart_rate_drift_percent,
+"heart_rate_drift_interpretable":
+    heart_rate_drift_interpretable,
     "first_half_average_spm":
         _average(cadence_first),
     "second_half_average_spm":
@@ -322,6 +456,134 @@ def analyze_simple_workout_phases(
         "phases":
             phases,
     }
+
+def _analyze_interval_recovery(
+    *,
+    stream_start: datetime,
+    streams: dict[
+        str,
+        list[dict[str, Any]],
+    ],
+    warmup_seconds: int,
+    repeat: int,
+    work_seconds: int,
+    recovery_seconds: int,
+) -> list[dict[str, Any]]:
+    if (
+        repeat <= 1
+        or work_seconds <= 0
+        or recovery_seconds <= 0
+    ):
+        return []
+
+    heart_rate = streams.get(
+        "heart_rate",
+        [],
+    )
+
+    if not heart_rate:
+        return []
+
+    results = []
+
+    cursor = warmup_seconds
+
+    for repetition in range(
+        1,
+        repeat,
+    ):
+        work_start = cursor
+        work_end = (
+            work_start + work_seconds
+        )
+
+        recovery_start = work_end
+        recovery_end = (
+            recovery_start
+            + recovery_seconds
+        )
+
+        work_window = min(
+            30,
+            work_seconds,
+        )
+
+        recovery_window = min(
+            30,
+            recovery_seconds,
+        )
+
+        work_end_hr = _average_for_range(
+            heart_rate,
+            stream_start,
+            work_end - work_window,
+            work_end,
+        )
+
+        early_recovery_values = (
+            _values_for_range(
+                heart_rate,
+                stream_start,
+                recovery_start,
+                recovery_start
+                + recovery_window,
+            )
+        )
+
+        recovery_peak_hr = (
+            _max_rolling_average(
+                early_recovery_values,
+                window_size=5,
+            )
+        )
+
+        recovery_end_hr = (
+            _average_for_range(
+                heart_rate,
+                stream_start,
+                recovery_end
+                - recovery_window,
+                recovery_end,
+            )
+        )
+
+        recovery_bpm = (
+            round(
+                recovery_peak_hr
+                - recovery_end_hr,
+                1,
+            )
+            if (
+                recovery_peak_hr
+                is not None
+                and recovery_end_hr
+                is not None
+            )
+            else None
+        )
+
+        results.append(
+            {
+                "repetition":
+                    repetition,
+                "work_phase":
+                    f"work_{repetition}",
+                "recovery_phase":
+                    f"recovery_{repetition}",
+                "heart_rate_work_end":
+                    work_end_hr,
+                "heart_rate_recovery_peak":
+                    recovery_peak_hr,
+                "heart_rate_recovery_end":
+                    recovery_end_hr,
+                "heart_rate_recovery_bpm":
+                    recovery_bpm,
+            }
+        )
+
+        cursor = recovery_end
+
+    return results
 
 def analyze_workout_phases(
     *,
@@ -461,6 +723,17 @@ def analyze_workout_phases(
         ).total_seconds()
     ) + 1
 
+    interval_recovery = (
+        _analyze_interval_recovery(
+            stream_start=stream_start,
+            streams=streams,
+            warmup_seconds=warmup_seconds,
+            repeat=repeat,
+            work_seconds=work_seconds,
+            recovery_seconds=recovery_seconds,
+        )
+    )
+
     return {
         "planned_duration_seconds":
             cursor,
@@ -470,4 +743,6 @@ def analyze_workout_phases(
             actual_stream_seconds - cursor,
         "phases":
             phases,
+        "interval_recovery":
+            interval_recovery,
     }

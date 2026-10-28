@@ -13,9 +13,12 @@ from endurain_client import EndurainClient
 from workout_phase_analyzer import (
     analyze_workout_phases,
 )
+from stream_signal_quality import (
+    clean_activity_streams,
+)
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "4"
 
 
 class WorkoutAnalysisResult(BaseModel):
@@ -75,8 +78,30 @@ def build_detailed_workout_analysis_input(
         endurain_activity_id
     )
 
+    cleaned = clean_activity_streams(
+        streams
+    )
+
+    streams = cleaned.streams
+
     planned = data["planned_workout"]
 
+    data["data_quality"] = {
+        name: {
+            "raw_samples":
+                quality.raw_samples,
+            "clean_samples":
+                quality.clean_samples,
+            "excluded_samples":
+                quality.excluded_samples,
+            "excluded_percent":
+                quality.excluded_percent,
+            "quality":
+                quality.quality,
+        }
+        for name, quality
+        in cleaned.quality.items()
+    }
     # V2 zunächst nur für nicht-intervallartige Einheiten.
     data["phase_metrics"] = (
     analyze_workout_phases(
@@ -284,6 +309,21 @@ recommendation beschreibt die Konsequenz für die
 nächsten Einheiten, ohne selbst den Trainingsplan
 zu verändern.
 
+DATA_QUALITY beschreibt die Qualität der
+zugrunde liegenden Endurain-Streams.
+
+Offensichtliche Messartefakte wurden vor der
+Berechnung von PHASE_METRICS deterministisch
+ausgeschlossen.
+
+excluded_samples und excluded_percent geben an,
+wie viele Messwerte eines Signals verworfen wurden.
+
+Bei quality=poor dürfen aus dem betroffenen Signal
+keine belastbaren Schlussfolgerungen gezogen werden.
+Bei quality=fair müssen Aussagen entsprechend
+vorsichtig formuliert werden.
+
 PHASE_METRICS enthält deterministisch aus den
 sekündlichen Endurain-Streams berechnete Werte für
 die einzelnen Trainingsphasen.
@@ -303,6 +343,76 @@ first_half_average_hr und second_half_average_hr
 dürfen zur Beurteilung der kardiovaskulären
 Belastungsentwicklung innerhalb der Einheit
 herangezogen werden.
+
+first_half_average_hr und second_half_average_hr
+dürfen zur Beurteilung der kardiovaskulären
+Belastungsentwicklung innerhalb der Einheit
+herangezogen werden.
+
+heart_rate_drift_bpm und heart_rate_drift_percent
+beschreiben die Veränderung der Herzfrequenz zwischen
+der ersten und zweiten Hälfte einer Phase.
+
+heart_rate_drift_interpretable gibt deterministisch an,
+ob diese Veränderung als HF-Drift sinnvoll interpretiert
+werden kann.
+
+Nur wenn heart_rate_drift_interpretable=true ist, darf
+heart_rate_drift_percent zur Beurteilung einer
+kardiovaskulären Drift herangezogen werden.
+
+Bei heart_rate_drift_interpretable=false darf aus dem
+Drift-Wert keine entsprechende Bewertung abgeleitet
+werden.
+
+INTERVAL_RECOVERY enthält bei Intervalltrainings
+deterministisch berechnete Werte zur
+Herzfrequenzerholung zwischen work- und
+recovery-Phasen.
+
+heart_rate_work_end ist die durchschnittliche
+Herzfrequenz der letzten 30 Sekunden der
+vorhergehenden work-Phase.
+
+heart_rate_recovery_peak ist der höchste gleitende
+5-Sekunden-Mittelwert innerhalb der ersten
+30 Sekunden der recovery-Phase. Dadurch wird die
+verzögerte Herzfrequenzreaktion nach Ende des
+Arbeitsintervalls berücksichtigt.
+
+heart_rate_recovery_end ist die durchschnittliche
+Herzfrequenz der letzten 30 Sekunden der
+recovery-Phase.
+
+heart_rate_recovery_bpm beschreibt den Abfall von
+heart_rate_recovery_peak zu heart_rate_recovery_end.
+
+Bewerte heart_rate_recovery_bpm nicht anhand
+pauschaler allgemeiner Grenzwerte als gut oder
+schlecht. Vergleiche insbesondere die Recoveries
+innerhalb derselben Einheit und berücksichtige
+Belastung, Ausgangsherzfrequenz und Verlauf über
+die Wiederholungen.
+
+Ein einzelner auffälliger Recovery-Wert darf nicht
+automatisch als Regenerationsproblem interpretiert
+werden.
+
+recovery_concern darf nicht allein deshalb true sein,
+weil ein einzelner späterer heart_rate_recovery_bpm-Wert
+niedriger als vorherige Werte ist.
+
+Ein recovery_concern erfordert einen konsistenten
+auffälligen Erholungsverlauf über mehrere Recoveries
+oder einen zusätzlichen konkreten Hinweis auf
+unzureichende Regeneration.
+
+Ein nicht-monotoner Verlauf einzelner Recovery-Werte
+reicht dafür nicht aus.
+
+power_in_target_percent basiert auf sekündlicher
+Instantanleistung. Bei einem engen Watt-Zielbereich
+...
 
 power_in_target_percent basiert auf sekündlicher
 Instantanleistung. Bei einem engen Watt-Zielbereich

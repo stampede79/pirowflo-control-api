@@ -39,6 +39,10 @@ from workout_activity_linker import (
 from training_history import (
     build_training_history,
 )
+from endurain_client import EndurainClient
+from stream_signal_quality import (
+    clean_activity_streams,
+)
 
 app = FastAPI(
     title="PiRowFlo Control API",
@@ -85,6 +89,12 @@ if not OPENAI_API_KEY:
 
 openai_client = OpenAI(
     api_key=OPENAI_API_KEY,
+)
+
+endurain_client = EndurainClient(
+    server=os.environ["ENDURAIN_SERVER"],
+    username=os.environ["ENDURAIN_USERNAME"],
+    password=os.environ["ENDURAIN_PASSWORD"],
 )
 
 TRAINING_PLAN_DIR = Path(
@@ -424,6 +434,51 @@ def get_live_metrics():
             detail=f"Could not read PiRowFlo metrics: {e}",
         )
 
+def serialize_clean_streams(
+    streams: dict[
+        str,
+        list[dict],
+    ],
+) -> list[dict]:
+    definitions = (
+        (
+            "heart_rate",
+            1,
+            "hr",
+        ),
+        (
+            "power",
+            2,
+            "power",
+        ),
+        (
+            "cadence",
+            3,
+            "cad",
+        ),
+    )
+
+    result = []
+
+    for name, stream_type, value_key in definitions:
+        points = streams.get(name, [])
+
+        result.append(
+            {
+                "stream_type": stream_type,
+                "stream_waypoints": [
+                    {
+                        "time":
+                            point["time"].isoformat(),
+                        value_key:
+                            point["value"],
+                    }
+                    for point in points
+                ],
+            }
+        )
+
+    return result
 
 @app.get("/")
 def root():
@@ -1040,6 +1095,58 @@ def decide_coach_recommendation(
             "scheduled_date":
                 workout.scheduled_date.isoformat(),
         }
+
+@app.get(
+    "/api/activities/{activity_id}/streams"
+)
+def get_activity_streams(
+    activity_id: int,
+    x_api_key: str = Header(...),
+):
+    require_api_key(x_api_key)
+
+    try:
+        raw_streams = (
+            endurain_client
+            .get_activity_streams(
+                activity_id
+            )
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Endurain streams could not "
+                "be loaded"
+            ),
+        ) from exc
+
+    cleaned = clean_activity_streams(
+        raw_streams
+    )
+
+    return {
+        "streams":
+            serialize_clean_streams(
+                cleaned.streams
+            ),
+        "data_quality": {
+            name: {
+                "raw_samples":
+                    quality.raw_samples,
+                "clean_samples":
+                    quality.clean_samples,
+                "excluded_samples":
+                    quality.excluded_samples,
+                "excluded_percent":
+                    quality.excluded_percent,
+                "quality":
+                    quality.quality,
+            }
+            for name, quality
+            in cleaned.quality.items()
+        },
+    }
 
 @app.get("/api/coach/overview")
 def coach_overview(
