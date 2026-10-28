@@ -5,6 +5,7 @@ from datetime import datetime
 from openai import OpenAI
 from pydantic import BaseModel
 
+from typing import Literal
 from database.engine import SessionLocal
 from database.models import (
     WorkoutActivityLink,
@@ -26,10 +27,34 @@ PROMPT_VERSION = "5"
 
 
 class WorkoutAnalysisResult(BaseModel):
-    execution: str
-    load_assessment: str
-    effort: str
-    progression: str
+    execution: Literal[
+        "good",
+        "partial",
+        "poor",
+        "unknown",
+    ]
+
+    load_assessment: Literal[
+        "low",
+        "appropriate",
+        "high",
+        "unknown",
+    ]
+
+    effort: Literal[
+        "easy",
+        "moderate",
+        "hard",
+        "unknown",
+    ]
+
+    progression: Literal[
+        "positive",
+        "stable",
+        "concerning",
+        "unknown",
+    ]
+
     recovery_concern: bool
     summary: str
     recommendation: str
