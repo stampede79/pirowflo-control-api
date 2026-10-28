@@ -13,6 +13,7 @@ from database.models import (
     Activity,
     Workout,
     WorkoutActivityLink,
+    WorkoutAnalysis,
 )
 from database.repositories.activity_repository import (
     ActivityRepository,
@@ -113,6 +114,31 @@ def build_training_history(
             for activity in activities
         }
 
+        analyses = list(
+            session.scalars(
+                select(WorkoutAnalysis)
+                .where(
+                    WorkoutAnalysis.activity_id.in_(
+                        [
+                            activity.id
+                            for activity in activities
+                        ]
+                    )
+                )
+                .order_by(
+                    WorkoutAnalysis.created_at.desc()
+                )
+            )
+        )
+
+        analyses_by_activity = {}
+
+        for analysis in analyses:
+            analyses_by_activity.setdefault(
+                analysis.activity_id,
+                analysis,
+            )
+
         entries = []
 
         for workout in workouts:
@@ -125,6 +151,11 @@ def build_training_history(
                     activities_by_id.get(
                         link.activity_id
                     )
+                )
+                analysis = (
+                    analyses_by_activity.get(activity.id)
+                    if activity is not None
+                    else None
                 )
 
                 entries.append(
@@ -146,6 +177,32 @@ def build_training_history(
                             is not None
                             else None
                         ),
+                        "analysis": (
+                            {
+                                "id":
+                                    analysis.id,
+                                "prompt_version":
+                                    analysis.prompt_version,
+                                "model":
+                                    analysis.model,
+                                "execution":
+                                    analysis.execution,
+                                "load_assessment":
+                                    analysis.load_assessment,
+                                "effort":
+                                    analysis.effort,
+                                "progression":
+                                    analysis.progression,
+                                "recovery_concern":
+                                    analysis.recovery_concern,
+                                "summary":
+                                    analysis.summary,
+                                "recommendation":
+                                    analysis.recommendation,
+                            }
+                            if analysis is not None
+                            else None
+                        ),                        
                     }
                 )
 
@@ -161,6 +218,7 @@ def build_training_history(
                             workout,
                         ),
                         "activity": None,
+                        "analysis": None,
                     }
                 )
 
@@ -177,6 +235,7 @@ def build_training_history(
                                 workout,
                             ),
                         "activity": None,
+                        "analysis": None,
                     }
                 )
 
@@ -211,20 +270,17 @@ def build_training_history(
                 entries.append(
                     {
                         "type": "planned",
-                        "match_status":
-                            "candidate",
-                        "workout":
-                            serialize_workout(
-                                session,
-                                workout,
-                            ),
-                        "activity":
-                            serialize_activity(
-                                candidate,
-                            ),
+                        "match_status": "candidate",
+                        "workout": serialize_workout(
+                            session,
+                            workout,
+                        ),
+                        "activity": serialize_activity(
+                            candidate,
+                        ),
+                        "analysis": None,
                     }
                 )
-
                 continue
 
             entries.append(
@@ -253,6 +309,7 @@ def build_training_history(
                         serialize_activity(
                             activity,
                         ),
+                    "analysis": None,
                 }
             )
 
