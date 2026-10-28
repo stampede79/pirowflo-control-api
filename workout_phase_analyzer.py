@@ -490,7 +490,7 @@ def _analyze_interval_recovery(
 
     for repetition in range(
         1,
-        repeat,
+        repeat + 1,
     ):
         work_start = cursor
         work_end = (
@@ -672,10 +672,7 @@ def analyze_workout_phases(
 
         # Nach dem letzten Arbeitsintervall keine
         # Recovery mehr einfügen.
-        if (
-            recovery_seconds
-            and repetition < repeat
-        ):
+        if recovery_seconds:
             phases.append(
                 _phase_metrics(
                     name=(

@@ -7,6 +7,7 @@ from workout_phase_analyzer import (
     _phase_metrics,
     _analyze_interval_recovery,
     _max_rolling_average,
+    analyze_workout_phases,
 )
 
 START = datetime(
@@ -189,16 +190,73 @@ def test_max_rolling_average_ignores_single_peak():
 
     assert result == 149.6
 
+def test_interval_phases_include_last_recovery():
+    seconds = 2529
+
+    streams = {
+        "heart_rate":
+            stream([130] * seconds),
+        "power":
+            stream([135] * seconds),
+        "cadence":
+            stream([18] * seconds),
+    }
+
+    result = analyze_workout_phases(
+        warmup="7m",
+        repeat=6,
+        work="3m,135-145w",
+        recovery="2m,90-100w",
+        cooldown="5m",
+        streams=streams,
+    )
+
+    assert (
+        result["planned_duration_seconds"]
+        == 2520
+    )
+
+    names = [
+        phase["name"]
+        for phase in result["phases"]
+    ]
+
+    assert "recovery_6" in names
+
+    recovery_6 = next(
+        phase
+        for phase in result["phases"]
+        if phase["name"] == "recovery_6"
+    )
+
+    assert recovery_6["start_seconds"] == 2100
+    assert recovery_6["end_seconds"] == 2220
+
+    cooldown = next(
+        phase
+        for phase in result["phases"]
+        if phase["name"] == "cooldown"
+    )
+
+    assert cooldown["start_seconds"] == 2220
+    assert cooldown["end_seconds"] == 2520
 
 def test_interval_recovery_uses_work_peak_and_end_windows():
     heart_rate = (
         [100] * 60
+        # work_1
         + [140] * 30
         + [145] * 30
+        # recovery_1
         + [150] * 5
         + [145] * 25
         + [125] * 30
+        # work_2
         + [140] * 60
+        # recovery_2
+        + [145] * 5
+        + [140] * 25
+        + [120] * 30
     )
 
     result = _analyze_interval_recovery(
@@ -215,7 +273,7 @@ def test_interval_recovery_uses_work_peak_and_end_windows():
         recovery_seconds=60,
     )
 
-    assert len(result) == 1
+    assert len(result) == 2
 
     recovery = result[0]
 
@@ -241,6 +299,49 @@ def test_interval_recovery_uses_work_peak_and_end_windows():
             "heart_rate_recovery_end"
         ]
         == 125.0
+    )
+
+    assert (
+        recovery[
+            "heart_rate_recovery_bpm"
+        ]
+        == 25.0
+    )
+
+    recovery = result[1]
+
+    assert (
+        recovery["repetition"]
+        == 2
+    )
+
+    assert (
+        recovery["work_phase"]
+        == "work_2"
+    )
+
+    assert (
+        recovery["recovery_phase"]
+        == "recovery_2"
+    )
+
+    assert (
+        recovery["heart_rate_work_end"]
+        == 140.0
+    )
+
+    assert (
+        recovery[
+            "heart_rate_recovery_peak"
+        ]
+        == 145.0
+    )
+
+    assert (
+        recovery[
+            "heart_rate_recovery_end"
+        ]
+        == 120.0
     )
 
     assert (
