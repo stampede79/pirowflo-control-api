@@ -15,17 +15,52 @@ from database.models import (
     WorkoutAnalysis,
 )
 import hashlib
+from endurain_client import EndurainClient
+from recovery_context import (
+    build_recovery_summary,
+)
+from typing import Literal
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 
 class WeeklyReviewResult(BaseModel):
-    assessment: str
-    trend: str
-    load_assessment: str
-    recovery_assessment: str
-    consistency: str
+    assessment: Literal[
+        "good",
+        "mixed",
+        "concerning",
+        "unknown",
+    ]
+
+    trend: Literal[
+        "improving",
+        "stable",
+        "declining",
+        "unclear",
+    ]
+
+    load_assessment: Literal[
+        "low",
+        "appropriate",
+        "high",
+        "unknown",
+    ]
+
+    recovery_assessment: Literal[
+        "good",
+        "watch",
+        "concerning",
+        "unknown",
+    ]
+
+    consistency: Literal[
+        "good",
+        "mixed",
+        "poor",
+        "unknown",
+    ]
+
     key_observations: list[str]
     summary: str
     recommendation: str
@@ -66,6 +101,24 @@ def build_weekly_review_input(
     start, end = _week_range(
         year,
         iso_week,
+    )
+
+    client = EndurainClient(
+        server=os.environ["ENDURAIN_SERVER"],
+        username=os.environ[
+            "ENDURAIN_USERNAME"
+        ],
+        password=os.environ[
+            "ENDURAIN_PASSWORD"
+        ],
+    )
+
+    recovery_summary = (
+        build_recovery_summary(
+            client.get_sleep_records(),
+            start,
+            end,
+        )
     )
 
     with SessionLocal() as session:
@@ -258,6 +311,8 @@ def build_weekly_review_input(
                     ),
             },
             "workouts": items,
+            "recovery_summary":
+                recovery_summary,
         }
 def generate_weekly_review(
     year: int,
@@ -333,6 +388,72 @@ Regenerationsproblem der gesamten Woche.
 
 Bewerte wiederkehrende Beobachtungen stärker als
 einzelne Auffälligkeiten.
+
+RECOVERY_SUMMARY enthält zusammengefasste Schlaf-
+und Erholungsdaten für die betrachtete Woche sowie
+persönliche Baselines aus den 28 Tagen vor Beginn
+der Woche.
+
+Bewerte diese Werte primär relativ zu den
+persönlichen Baselines und nicht anhand pauschaler
+allgemeiner Grenzwerte.
+
+days_with_data gibt an, für wie viele Tage des
+Wochenzeitraums Recovery-Daten vorliegen. Wenn
+weniger als sieben Tage vorliegen, darf der Zeitraum
+nicht wie eine vollständig beobachtete Woche
+interpretiert werden.
+
+sleep.average_minutes und
+sleep.baseline_28d_minutes beschreiben die
+durchschnittliche Schlafdauer der betrachteten Tage
+und die persönliche Baseline der vorherigen 28 Tage.
+
+sleep.below_baseline_days beschreibt, an wie vielen
+beobachteten Tagen die Schlafdauer unter dieser
+Baseline lag. Berücksichtige dabei immer
+days_with_data.
+
+sleep_score, resting_heart_rate und sleep_stress
+enthalten ebenfalls Wochenmittel, persönliche
+28-Tage-Baselines und deren Abweichungen.
+
+Die HRV-Statuswerte BALANCED, UNBALANCED und LOW
+stammen aus dem Quellsystem. Eine Häufung von LOW
+oder UNBALANCED darf NICHT isoliert als
+Regenerationsproblem bewertet werden. Sie muss im
+Zusammenhang mit den persönlichen Baselines,
+anderen Recovery-Signalen und den tatsächlichen
+Trainingsreaktionen betrachtet werden.
+
+Ein einzelnes negatives Recovery-Signal reicht nicht
+für recovery_assessment=concerning.
+
+recovery_assessment=concerning erfordert mehrere
+übereinstimmende auffällige Recovery-Signale über
+den betrachteten Zeitraum oder auffällige
+Recovery-Daten zusammen mit wiederkehrend
+auffälligen Trainingsreaktionen.
+
+Wenn Recovery-Daten leicht ungünstig sind, während
+Ruhepuls, Schlafstress und Trainingsreaktionen
+unauffällig bleiben, ist eine vorsichtige
+Beobachtung angemessener als eine problematische
+Bewertung.
+
+Recovery-Hinweise in den Workout-Analysen und im
+RECOVERY_SUMMARY können auf denselben zugrunde
+liegenden Schlaf- und Erholungsdaten beruhen.
+Behandle sie deshalb NICHT automatisch als
+voneinander unabhängige Signale und zähle denselben
+Recovery-Hinweis nicht doppelt.
+
+Fehlende Recovery-Werte oder eine unvollständige
+Datenabdeckung dürfen nicht als negatives Signal
+interpretiert werden.
+
+Leite aus Schlaf-, HRV-, Ruhepuls- oder Stressdaten
+keine medizinischen Diagnosen ab.
 
 Die Durchschnittsleistung einer Gesamtaktivität darf
 nicht direkt mit dem Wattziel des Hauptteils

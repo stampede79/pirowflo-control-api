@@ -228,3 +228,225 @@ def build_recovery_context(
             ),
         },
     }
+
+def build_recovery_summary(
+    sleep_records: list[dict[str, Any]],
+    start_date: date,
+    end_date: date,
+) -> dict[str, Any]:
+    period_records = [
+        record
+        for record in sleep_records
+        if (
+            isinstance(record.get("date"), str)
+            and start_date
+            <= date.fromisoformat(record["date"])
+            < end_date
+        )
+    ]
+
+    baseline_start = (
+        start_date - timedelta(days=28)
+    )
+
+    baseline_records = [
+        record
+        for record in sleep_records
+        if (
+            isinstance(record.get("date"), str)
+            and baseline_start
+            <= date.fromisoformat(record["date"])
+            < start_date
+        )
+    ]
+
+    sleep_average = _average(
+        period_records,
+        "total_sleep_seconds",
+    )
+
+    sleep_baseline = _average(
+        baseline_records,
+        "total_sleep_seconds",
+    )
+
+    score_average = _average(
+        period_records,
+        "sleep_score_overall",
+    )
+
+    score_baseline = _average(
+        baseline_records,
+        "sleep_score_overall",
+    )
+
+    resting_hr_average = _average(
+        period_records,
+        "resting_heart_rate",
+    )
+
+    resting_hr_baseline = _average(
+        baseline_records,
+        "resting_heart_rate",
+    )
+
+    stress_average = _average(
+        period_records,
+        "avg_sleep_stress",
+    )
+
+    stress_baseline = _average(
+        baseline_records,
+        "avg_sleep_stress",
+    )
+
+    hrv_statuses = [
+        record.get("hrv_status")
+        for record in period_records
+        if record.get("hrv_status")
+        is not None
+    ]
+
+    below_sleep_baseline_days = None
+
+    if sleep_baseline is not None:
+        below_sleep_baseline_days = sum(
+            1
+            for record in period_records
+            if (
+                isinstance(
+                    record.get(
+                        "total_sleep_seconds"
+                    ),
+                    (int, float),
+                )
+                and record[
+                    "total_sleep_seconds"
+                ] < sleep_baseline
+            )
+        )
+
+    return {
+        "start_date":
+            start_date.isoformat(),
+        "end_date":
+            (
+                end_date
+                - timedelta(days=1)
+            ).isoformat(),
+
+        "days_with_data":
+            len(period_records),
+
+        "sleep": {
+            "average_minutes": (
+                _round_or_none(
+                    sleep_average / 60
+                )
+                if sleep_average
+                is not None
+                else None
+            ),
+            "baseline_28d_minutes": (
+                _round_or_none(
+                    sleep_baseline / 60
+                )
+                if sleep_baseline
+                is not None
+                else None
+            ),
+            "deviation_minutes": (
+                _round_or_none(
+                    (
+                        sleep_average
+                        - sleep_baseline
+                    )
+                    / 60
+                )
+                if (
+                    sleep_average
+                    is not None
+                    and sleep_baseline
+                    is not None
+                )
+                else None
+            ),
+            "below_baseline_days":
+                below_sleep_baseline_days,
+        },
+
+        "sleep_score": {
+            "average":
+                score_average,
+            "baseline_28d":
+                score_baseline,
+            "deviation": (
+                _round_or_none(
+                    score_average
+                    - score_baseline
+                )
+                if (
+                    score_average is not None
+                    and score_baseline
+                    is not None
+                )
+                else None
+            ),
+        },
+
+        "resting_heart_rate": {
+            "average_bpm":
+                resting_hr_average,
+            "baseline_28d_bpm":
+                resting_hr_baseline,
+            "deviation_bpm": (
+                _round_or_none(
+                    resting_hr_average
+                    - resting_hr_baseline
+                )
+                if (
+                    resting_hr_average
+                    is not None
+                    and resting_hr_baseline
+                    is not None
+                )
+                else None
+            ),
+        },
+
+        "hrv": {
+            "balanced_days":
+                hrv_statuses.count(
+                    "BALANCED"
+                ),
+            "unbalanced_days":
+                hrv_statuses.count(
+                    "UNBALANCED"
+                ),
+            "low_days":
+                hrv_statuses.count(
+                    "LOW"
+                ),
+            "days_with_status":
+                len(hrv_statuses),
+        },
+
+        "sleep_stress": {
+            "average":
+                stress_average,
+            "baseline_28d":
+                stress_baseline,
+            "deviation": (
+                _round_or_none(
+                    stress_average
+                    - stress_baseline
+                )
+                if (
+                    stress_average is not None
+                    and stress_baseline
+                    is not None
+                )
+                else None
+            ),
+        },
+    }

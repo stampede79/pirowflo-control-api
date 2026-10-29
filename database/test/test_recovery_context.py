@@ -2,6 +2,7 @@ from datetime import date
 
 from recovery_context import (
     build_recovery_context,
+    build_recovery_summary,
 )
 
 
@@ -305,4 +306,327 @@ def test_short_history_uses_available_records():
             "baseline_28d_bpm"
         ]
         == 48.0
+    )
+
+def test_recovery_summary_calculates_period_and_baseline():
+    records = [
+        # Baseline vor der betrachteten Woche.
+        sleep_record(
+            "2026-10-18",
+            sleep_seconds=21600,
+            score=70,
+            resting_hr=48,
+            stress=20,
+        ),
+        sleep_record(
+            "2026-10-19",
+            sleep_seconds=25200,
+            score=80,
+            resting_hr=46,
+            stress=16,
+        ),
+
+        # Betrachteter Zeitraum.
+        sleep_record(
+            "2026-10-20",
+            sleep_seconds=18000,
+            score=60,
+            resting_hr=50,
+            stress=22,
+        ),
+        sleep_record(
+            "2026-10-21",
+            sleep_seconds=21600,
+            score=70,
+            resting_hr=48,
+            stress=18,
+        ),
+    ]
+
+    result = build_recovery_summary(
+        records,
+        date(2026, 10, 20),
+        date(2026, 10, 22),
+    )
+
+    assert result["days_with_data"] == 2
+
+    assert (
+        result["sleep"]["average_minutes"]
+        == 330.0
+    )
+
+    assert (
+        result["sleep"]["baseline_28d_minutes"]
+        == 390.0
+    )
+
+    assert (
+        result["sleep"]["deviation_minutes"]
+        == -60.0
+    )
+
+    assert (
+        result["sleep_score"]["average"]
+        == 65.0
+    )
+
+    assert (
+        result["sleep_score"]["baseline_28d"]
+        == 75.0
+    )
+
+    assert (
+        result["resting_heart_rate"][
+            "average_bpm"
+        ]
+        == 49.0
+    )
+
+    assert (
+        result["resting_heart_rate"][
+            "baseline_28d_bpm"
+        ]
+        == 47.0
+    )
+
+    assert (
+        result["sleep_stress"]["average"]
+        == 20.0
+    )
+
+    assert (
+        result["sleep_stress"][
+            "baseline_28d"
+        ]
+        == 18.0
+    )
+
+
+def test_recovery_summary_excludes_period_from_baseline():
+    records = [
+        sleep_record(
+            "2026-10-19",
+            sleep_seconds=25200,
+            resting_hr=45,
+        ),
+        sleep_record(
+            "2026-10-20",
+            sleep_seconds=10800,
+            resting_hr=80,
+        ),
+        sleep_record(
+            "2026-10-21",
+            sleep_seconds=10800,
+            resting_hr=80,
+        ),
+    ]
+
+    result = build_recovery_summary(
+        records,
+        date(2026, 10, 20),
+        date(2026, 10, 22),
+    )
+
+    assert (
+        result["sleep"]["baseline_28d_minutes"]
+        == 420.0
+    )
+
+    assert (
+        result["resting_heart_rate"][
+            "baseline_28d_bpm"
+        ]
+        == 45.0
+    )
+
+
+def test_recovery_summary_supports_missing_days():
+    records = [
+        sleep_record(
+            "2026-10-19",
+        ),
+        sleep_record(
+            "2026-10-20",
+        ),
+        # 21.10. fehlt absichtlich.
+        sleep_record(
+            "2026-10-22",
+        ),
+    ]
+
+    result = build_recovery_summary(
+        records,
+        date(2026, 10, 20),
+        date(2026, 10, 23),
+    )
+
+    assert result["days_with_data"] == 2
+
+
+def test_recovery_summary_counts_hrv_statuses():
+    records = [
+        sleep_record(
+            "2026-10-20",
+            hrv_status="BALANCED",
+        ),
+        sleep_record(
+            "2026-10-21",
+            hrv_status="LOW",
+        ),
+        sleep_record(
+            "2026-10-22",
+            hrv_status="LOW",
+        ),
+        sleep_record(
+            "2026-10-23",
+            hrv_status="UNBALANCED",
+        ),
+        sleep_record(
+            "2026-10-24",
+            hrv_status=None,
+        ),
+    ]
+
+    result = build_recovery_summary(
+        records,
+        date(2026, 10, 20),
+        date(2026, 10, 25),
+    )
+
+    assert (
+        result["hrv"]["balanced_days"]
+        == 1
+    )
+
+    assert (
+        result["hrv"]["unbalanced_days"]
+        == 1
+    )
+
+    assert (
+        result["hrv"]["low_days"]
+        == 2
+    )
+
+    assert (
+        result["hrv"]["days_with_status"]
+        == 4
+    )
+
+
+def test_recovery_summary_ignores_missing_optional_values():
+    records = [
+        sleep_record(
+            "2026-10-19",
+            score=80,
+            resting_hr=46,
+            stress=18,
+        ),
+        sleep_record(
+            "2026-10-20",
+            score=None,
+            resting_hr=None,
+            stress=None,
+        ),
+        sleep_record(
+            "2026-10-21",
+            score=70,
+            resting_hr=50,
+            stress=20,
+        ),
+    ]
+
+    result = build_recovery_summary(
+        records,
+        date(2026, 10, 20),
+        date(2026, 10, 22),
+    )
+
+    # Fehlende Werte werden nicht als 0
+    # in die Mittelwerte aufgenommen.
+    assert (
+        result["sleep_score"]["average"]
+        == 70.0
+    )
+
+    assert (
+        result["resting_heart_rate"][
+            "average_bpm"
+        ]
+        == 50.0
+    )
+
+    assert (
+        result["sleep_stress"]["average"]
+        == 20.0
+    )
+
+
+def test_recovery_summary_without_baseline_returns_none():
+    records = [
+        sleep_record(
+            "2026-10-20",
+            sleep_seconds=21600,
+            score=70,
+            resting_hr=48,
+            stress=18,
+        ),
+        sleep_record(
+            "2026-10-21",
+            sleep_seconds=23400,
+            score=75,
+            resting_hr=46,
+            stress=16,
+        ),
+    ]
+
+    result = build_recovery_summary(
+        records,
+        date(2026, 10, 20),
+        date(2026, 10, 22),
+    )
+
+    assert (
+        result["sleep"]["baseline_28d_minutes"]
+        is None
+    )
+
+    assert (
+        result["sleep"]["deviation_minutes"]
+        is None
+    )
+
+    assert (
+        result["sleep_score"]["baseline_28d"]
+        is None
+    )
+
+    assert (
+        result["sleep_score"]["deviation"]
+        is None
+    )
+
+    assert (
+        result["resting_heart_rate"][
+            "baseline_28d_bpm"
+        ]
+        is None
+    )
+
+    assert (
+        result["resting_heart_rate"][
+            "deviation_bpm"
+        ]
+        is None
+    )
+
+    assert (
+        result["sleep_stress"]["baseline_28d"]
+        is None
+    )
+
+    assert (
+        result["sleep_stress"]["deviation"]
+        is None
     )

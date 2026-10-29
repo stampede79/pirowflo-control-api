@@ -18,18 +18,55 @@ import os
 
 from openai import OpenAI
 from pydantic import BaseModel
+from typing import Literal
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 
 class MonthlyReviewResult(BaseModel):
-    assessment: str
-    trend: str
-    load_assessment: str
-    recovery_assessment: str
-    consistency: str
-    progression: str
+    assessment: Literal[
+        "good",
+        "mixed",
+        "concerning",
+        "unknown",
+    ]
+
+    trend: Literal[
+        "improving",
+        "stable",
+        "declining",
+        "unclear",
+    ]
+
+    load_assessment: Literal[
+        "low",
+        "appropriate",
+        "high",
+        "unknown",
+    ]
+
+    recovery_assessment: Literal[
+        "good",
+        "watch",
+        "concerning",
+        "unknown",
+    ]
+
+    consistency: Literal[
+        "good",
+        "mixed",
+        "poor",
+        "unknown",
+    ]
+
+    progression: Literal[
+        "positive",
+        "stable",
+        "concerning",
+        "unclear",
+    ]
+
     key_observations: list[str]
     strengths: list[str]
     focus_areas: list[str]
@@ -137,6 +174,7 @@ def build_monthly_review_input(
 
         completed = 0
         skipped = 0
+        missed = 0
         planned = 0
 
         total_duration_seconds = 0.0
@@ -149,6 +187,8 @@ def build_monthly_review_input(
                 completed += 1
             elif workout.status == "skipped":
                 skipped += 1
+            elif workout.status == "missed":
+                missed += 1
             elif workout.status == "planned":
                 planned += 1
 
@@ -302,6 +342,10 @@ def build_monthly_review_input(
                     "week":
                         f"{week_year}-W"
                         f"{iso_week:02d}",
+                    "prompt_version":
+                        review.prompt_version,
+                    "model":
+                        review.model,
                     "assessment":
                         review.assessment,
                     "trend":
@@ -345,6 +389,8 @@ def build_monthly_review_input(
                     completed,
                 "skipped_workouts":
                     skipped,
+                "missed_workouts":
+                    missed,
                 "open_workouts":
                     planned,
                 "total_duration_minutes":
@@ -438,6 +484,38 @@ Eine einzelne auffällige Einheit ist kein
 Monatstrend. Wiederkehrende Beobachtungen über
 mehrere Einheiten oder Wochen sind stärker zu
 gewichten.
+
+Die Wochenreviews sind die primäre Grundlage für
+wochenübergreifende Recovery- und Belastungstrends.
+
+Recovery-Hinweise in Einzelanalysen können bereits
+in den zugehörigen Wochenreviews berücksichtigt
+worden sein. Werte denselben zugrunde liegenden
+Recovery-Hinweis deshalb nicht erneut als
+unabhängige Evidenz.
+
+Ein recovery_assessment=watch in einer einzelnen
+Woche ist ein Beobachtungspunkt und nicht automatisch
+ein Regenerationsproblem des gesamten Monats.
+
+Für recovery_assessment=concerning auf Monatsebene
+sind wiederkehrende oder anhaltende auffällige
+Recovery-Muster über mehrere Wochen erforderlich
+oder ein besonders deutliches Muster zusammen mit
+wiederkehrend auffälligen Trainingsreaktionen.
+
+Mehrere Wochen mit recovery_assessment=good oder
+unauffälligen Trainingsreaktionen dürfen als
+gegenläufige Evidenz berücksichtigt werden.
+
+Wenn eine Woche nur teilweise innerhalb des
+betrachteten Monats liegt oder unvollständig
+beobachtet wurde, interpretiere sie entsprechend
+vorsichtig.
+
+Nimm aus Schlaf-, HRV-, Ruhepuls- oder
+Regenerationshinweisen keine medizinischen
+Diagnosen vor.
 
 Nimm selbst keine Änderungen an einem bestehenden
 Trainingsplan vor.
