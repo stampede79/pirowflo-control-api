@@ -1,7 +1,9 @@
 import argparse
-from datetime import date
+from datetime import date, timedelta
 
 from monthly_review_generator import (
+    _month_range,
+    _week_keys_for_month,
     build_monthly_review_input,
     generate_monthly_review,
 )
@@ -19,7 +21,12 @@ from monthly_plan_recheck import (
     create_plan_reassessment_recommendation,
 )
 
-def next_month(
+
+from weekly_review_generator import (
+    generate_weekly_review,
+)
+
+def next_month_from_year_month(
     year: int,
     month: int,
 ) -> tuple[int, int]:
@@ -37,7 +44,7 @@ def previous_month(
     return today.year, today.month - 1
 
 
-def next_month(
+def next_month_from_date(
     today: date,
 ) -> tuple[int, int]:
     if today.month == 12:
@@ -45,6 +52,62 @@ def next_month(
 
     return today.year, today.month + 1
 
+def ensure_completed_weekly_reviews(
+    *,
+    year: int,
+    month: int,
+    today: date,
+) -> bool:
+    start, end = _month_range(
+        year,
+        month,
+    )
+
+    if not monthly_weekly_reviews_ready(
+        year=year,
+        month=month,
+        today=today,
+    ):
+        return False
+
+    week_keys = sorted(
+        _week_keys_for_month(
+            start,
+            end,
+        )
+    )
+
+    for week_year, iso_week in week_keys:
+        monday = date.fromisocalendar(
+            week_year,
+            iso_week,
+            1,
+        )
+
+        week_end = (
+            monday
+            + timedelta(days=7)
+        )
+
+        if today < week_end:
+            print(
+                "Woche noch nicht abgeschlossen:",
+                f"{week_year}-W{iso_week:02d}",
+            )
+
+            return False
+
+        print(
+            "Weekly Review sicherstellen:",
+            f"{week_year}-W{iso_week:02d}",
+        )
+
+        generate_weekly_review(
+            week_year,
+            iso_week,
+        )
+
+    return True
 
 def finalize_previous_month(
     *,
@@ -94,42 +157,38 @@ def finalize_previous_month(
         )
         print("OpenAI calls: 0")
         return 0
-
-    if recheck["needed"]:
-        print(
-            "Eine Neubewertung des bestehenden "
-            "Trainingsplans ist sinnvoll."
+    
+    weekly_ready = (
+        ensure_completed_weekly_reviews(
+            year=year,
+            month=month,
+            today=date.today(),
         )
+    )
 
+    if not weekly_ready:
         print(
-            "Recommendation ID:",
-            recheck[
-                "recommendation_id"
-            ],
+            "Mindestens eine relevante Woche "
+            "ist noch nicht abgeschlossen."
         )
+        print(
+            "Monatsabschluss wird "
+            "übersprungen."
+        )
+        print("OpenAI calls: 0")
 
-        print(
-            "Recommendation neu:",
-            "JA"
-            if recheck[
-                "recommendation_created"
-            ]
-            else "NEIN",
-        )
-
-        print(
-            "Automatische Planänderungen werden "
-            "nicht vorgenommen."
-        )
+        return 0
         
     review = generate_monthly_review(
         year,
         month,
     )
 
-    target_year, target_month = next_month(
-        year,
-        month,
+    target_year, target_month = (
+        next_month_from_year_month(
+            year,
+            month,
+        )
     )
 
     recheck = (
@@ -202,6 +261,38 @@ def finalize_previous_month(
 
     return 0
 
+def monthly_weekly_reviews_ready(
+    *,
+    year: int,
+    month: int,
+    today: date,
+) -> bool:
+    start, end = _month_range(
+        year,
+        month,
+    )
+
+    for week_year, iso_week in sorted(
+        _week_keys_for_month(
+            start,
+            end,
+        )
+    ):
+        monday = date.fromisocalendar(
+            week_year,
+            iso_week,
+            1,
+        )
+
+        week_end = (
+            monday
+            + timedelta(days=7)
+        )
+
+        if today < week_end:
+            return False
+
+    return True
 
 def prepare_next_month(
     *,
@@ -315,7 +406,7 @@ def main() -> int:
         year = args.year
         month = args.month
     else:
-        year, month = next_month(
+        year, month = next_month_from_date(
             today
         )
 
