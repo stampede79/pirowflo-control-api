@@ -16,7 +16,7 @@ from monthly_planning_context import (
 
 MODEL = "gpt-6-luna"
 
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 
 DRAFT_DIR = Path(
     "/var/lib/pirowflo-control/training-plans"
@@ -266,6 +266,39 @@ gewichten.
 
 Wenn ein Monthly Review vorhanden ist, verwende ihn
 als übergeordnete Bewertung des Vormonats.
+
+RECOVERY UND REGENERATION:
+
+Wenn ein Monthly Review vorhanden ist, ist dessen
+recovery_assessment die primäre zusammengefasste
+Bewertung der Regeneration des Vormonats.
+
+Weekly Reviews dienen dazu, zeitliche Muster und
+einzelne auffällige Wochen zu verstehen.
+
+Recovery-Hinweise aus Workout-Analysen können bereits
+in Weekly Reviews und im Monthly Review berücksichtigt
+worden sein. Werte denselben zugrunde liegenden
+Recovery-Hinweis deshalb nicht mehrfach als
+unabhängige Evidenz.
+
+Ein einzelnes recovery_concern=true in einer
+Workout-Analyse oder recovery_assessment=watch in
+einer einzelnen Woche rechtfertigt allein keine
+Reduktion des Folgemonats.
+
+Bei recovery_assessment=watch soll die Planung
+grundsätzlich konservativ bleiben und ausreichende
+Regeneration vorsehen, ohne automatisch Umfang oder
+Intensität zu reduzieren.
+
+Eine deutliche Reduktion von Umfang oder Intensität
+soll insbesondere bei recovery_assessment=concerning
+oder bei wiederkehrenden auffälligen Recovery- und
+Leistungsmustern erwogen werden.
+
+Recovery-Bewertungen sind Trainingskontext und keine
+medizinische Diagnose.
 
 Wenn noch kein Monthly Review vorhanden ist,
 erstelle trotzdem einen konservativen Plan anhand

@@ -244,6 +244,10 @@ def build_monthly_planning_input(
                     "week":
                         f"{review.year}-W"
                         f"{review.iso_week:02d}",
+                    "prompt_version":
+                        review.prompt_version,
+                    "model":
+                        review.model,                    
                     "assessment":
                         review.assessment,
                     "trend":
@@ -291,6 +295,10 @@ def build_monthly_planning_input(
             )
 
             monthly_data = {
+                "prompt_version":
+                    monthly_review.prompt_version,
+                "model":
+                    monthly_review.model,
                 "assessment":
                     monthly_review.assessment,
                 "trend":
