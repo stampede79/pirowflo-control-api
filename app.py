@@ -43,6 +43,9 @@ from endurain_client import EndurainClient
 from stream_signal_quality import (
     clean_activity_streams,
 )
+from workout_analyzer import (
+    PROMPT_VERSION as WORKOUT_ANALYSIS_PROMPT_VERSION,
+)
 
 app = FastAPI(
     title="PiRowFlo Control API",
@@ -1232,7 +1235,7 @@ def coach_overview(
             )
             .where(
                 WorkoutAnalysis.prompt_version
-                == "2"
+                == WORKOUT_ANALYSIS_PROMPT_VERSION
             )
             .order_by(
                 Activity.start_time.desc(),
