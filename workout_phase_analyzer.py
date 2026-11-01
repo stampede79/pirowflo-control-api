@@ -156,6 +156,35 @@ def _split_half(
         values[midpoint:],
     )
 
+def _power_trend(
+    change_percent: float | None,
+) -> str:
+    if change_percent is None:
+        return "unknown"
+
+    if change_percent > 5.0:
+        return "rising"
+
+    if change_percent < -5.0:
+        return "falling"
+
+    return "stable"
+
+
+def _heart_rate_trend(
+    change_bpm: float | None,
+) -> str:
+    if change_bpm is None:
+        return "unknown"
+
+    if change_bpm > 3.0:
+        return "rising"
+
+    if change_bpm < -3.0:
+        return "falling"
+
+    return "stable"
+
 def _phase_metrics(
     *,
     name: str,
@@ -320,10 +349,18 @@ def _phase_metrics(
     power_change_watts,
 "power_change_percent":
     power_change_percent,
+"power_trend":
+    _power_trend(
+        power_change_percent
+    ),
 "heart_rate_drift_bpm":
     heart_rate_drift_bpm,
 "heart_rate_drift_percent":
     heart_rate_drift_percent,
+"heart_rate_trend":
+    _heart_rate_trend(
+        heart_rate_drift_bpm
+    ),
 "heart_rate_drift_interpretable":
     heart_rate_drift_interpretable,
     "first_half_average_spm":

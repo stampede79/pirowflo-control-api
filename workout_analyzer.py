@@ -23,7 +23,7 @@ from recovery_context import (
 )
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "5"
+PROMPT_VERSION = "6"
 
 
 class WorkoutAnalysisResult(BaseModel):
@@ -377,18 +377,67 @@ den Durchschnittswerten der Gesamtaktivität.
 Bei Leistungsvorgaben ist average_power der
 entsprechenden work-Phase besonders relevant.
 
-first_half_average_power und
-second_half_average_power zeigen, ob die Leistung
-innerhalb der Phase stabil geblieben ist.
+first_half_average_power, second_half_average_power,
+first_half_average_hr und second_half_average_hr sind
+ausschließlich interne Vergleichswerte zur Beurteilung
+des zeitlichen Verlaufs innerhalb einer Trainingsphase.
 
-first_half_average_hr und second_half_average_hr
-dürfen zur Beurteilung der kardiovaskulären
-Belastungsentwicklung innerhalb der Einheit
-herangezogen werden.
+Bezeichne diese Werte in summary, recommendation oder
+anderen nutzerseitigen Texten NICHT als "erste Hälfte",
+"zweite Hälfte", "zwischen den Hälften" oder als
+eigenständige Trainingsabschnitte.
+
+Bei einer einzelnen kontinuierlichen work-Phase
+beschreibe stattdessen den zeitlichen Verlauf, zum
+Beispiel mit Formulierungen wie:
+- "im Verlauf des Hauptteils"
+- "gegen Ende des Hauptteils"
+- "über den Hauptteil hinweg"
+- "die Leistung blieb über den Hauptteil stabil"
+
+Nur tatsächlich im Trainingsplan vorhandene Phasen,
+Intervalle oder Wiederholungen dürfen als Abschnitte,
+Intervalle oder Wiederholungen bezeichnet werden.
+
+Bei Intervalltrainings beziehe dich auf die tatsächlich
+vorhandenen work_1, work_2, ... und recovery_1,
+recovery_2, ... Phasen. Verwende auch dort die internen
+first_half_* und second_half_* Werte nur zur Beurteilung
+des Verlaufs INNERHALB des jeweiligen Intervalls und
+nicht als Bezeichnung zusätzlicher Trainingsabschnitte.
+
+power_trend ist eine deterministisch berechnete
+Beschreibung des Leistungsverlaufs innerhalb einer
+Phase:
+- stable: Leistung blieb im Verlauf weitgehend stabil
+- rising: Leistung nahm im Verlauf zu
+- falling: Leistung nahm im Verlauf ab
+- unknown: keine belastbare Aussage möglich
+
+heart_rate_trend beschreibt entsprechend ausschließlich
+die zeitliche Richtung der Herzfrequenzentwicklung:
+- stable
+- rising
+- falling
+- unknown
+
+Diese Trendfelder sind für die nutzerseitige
+Formulierung gegenüber den technischen first_half_*
+und second_half_* Feldern zu bevorzugen.
+
+Die Trendwerte sind deskriptiv und stellen für sich
+allein keine Bewertung als gut oder schlecht dar.
 
 heart_rate_drift_bpm und heart_rate_drift_percent
-beschreiben die Veränderung der Herzfrequenz zwischen
-der ersten und zweiten Hälfte einer Phase.
+beschreiben die Veränderung der Herzfrequenz im
+zeitlichen Verlauf einer Phase. Die Berechnung
+vergleicht intern einen früheren mit einem späteren
+Teil der Phase.
+
+Beschreibe dies im nutzerseitigen Text als Entwicklung
+"im Verlauf", "über die Phase hinweg" oder "gegen Ende"
+der jeweiligen Phase und nicht als Vergleich zweier
+Hälften.
 
 heart_rate_drift_interpretable gibt deterministisch an,
 ob diese Veränderung als HF-Drift sinnvoll interpretiert
@@ -515,7 +564,7 @@ Instantanleistung. Bei einem engen Watt-Zielbereich
 darf ein niedriger Wert allein NICHT als schlechte
 Ausführung bewertet werden. Berücksichtige
 insbesondere Phasendurchschnitt, Leistungsstreuung
-und Stabilität zwischen erster und zweiter Hälfte.
+und den Leistungsverlauf innerhalb der Phase.
 """,
                 },
                 {

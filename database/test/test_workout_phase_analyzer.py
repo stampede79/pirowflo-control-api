@@ -86,6 +86,92 @@ def test_long_stable_work_phase_has_interpretable_hr_drift():
         is True
     )
 
+def test_phase_metrics_describe_stable_power_and_rising_hr():
+    power = (
+        [100] * 300
+        + [104] * 300
+    )
+
+    heart_rate = (
+        [130] * 300
+        + [138] * 300
+    )
+
+    result = _phase_metrics(
+        name="work",
+        start_seconds=0,
+        end_seconds=600,
+        stream_start=START,
+        streams={
+            "power": stream(power),
+            "heart_rate":
+                stream(heart_rate),
+            "cadence":
+                stream([18] * 600),
+        },
+    )
+
+    assert result["power_change_percent"] == 4.0
+    assert result["power_trend"] == "stable"
+
+    assert result["heart_rate_drift_bpm"] == 8.0
+    assert result["heart_rate_trend"] == "rising"
+
+
+def test_phase_metrics_describe_rising_power():
+    power = (
+        [100] * 300
+        + [106] * 300
+    )
+
+    result = _phase_metrics(
+        name="work",
+        start_seconds=0,
+        end_seconds=600,
+        stream_start=START,
+        streams={
+            "power": stream(power),
+            "heart_rate":
+                stream([130] * 600),
+            "cadence":
+                stream([18] * 600),
+        },
+    )
+
+    assert result["power_change_percent"] == 6.0
+    assert result["power_trend"] == "rising"
+
+
+def test_phase_metrics_describe_falling_power_and_hr():
+    power = (
+        [100] * 300
+        + [94] * 300
+    )
+
+    heart_rate = (
+        [140] * 300
+        + [136] * 300
+    )
+
+    result = _phase_metrics(
+        name="work",
+        start_seconds=0,
+        end_seconds=600,
+        stream_start=START,
+        streams={
+            "power": stream(power),
+            "heart_rate":
+                stream(heart_rate),
+            "cadence":
+                stream([18] * 600),
+        },
+    )
+
+    assert result["power_change_percent"] == -6.0
+    assert result["power_trend"] == "falling"
+
+    assert result["heart_rate_drift_bpm"] == -4.0
+    assert result["heart_rate_trend"] == "falling"
 
 def test_short_work_phase_hr_drift_is_not_interpretable():
     result = _phase_metrics(
