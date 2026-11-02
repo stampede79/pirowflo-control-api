@@ -5,10 +5,6 @@ from sqlalchemy import select
 
 from database.engine import SessionLocal
 from database.models import (
-    MonthlyReview,
-    TrainingPlan,
-)
-from database.models import (
     CoachRecommendation,
     MonthlyReview,
     TrainingPlan,
@@ -23,6 +19,55 @@ def _previous_month(
         return year - 1, 12
 
     return year, month - 1
+
+def _reassessment_signals(
+    *,
+    assessment: str | None,
+    trend: str | None,
+    load_assessment: str | None,
+    recovery_assessment: str | None,
+    progression: str | None,
+) -> list[str]:
+    signals = []
+
+    if assessment == "concerning":
+        signals.append(
+            "monthly_assessment_concerning"
+        )
+
+    if trend == "declining":
+        signals.append(
+            "monthly_trend_declining"
+        )
+
+    if load_assessment == "high":
+        signals.append(
+            "monthly_load_high"
+        )
+
+    if (
+        load_assessment == "low"
+        and (
+            assessment == "concerning"
+            or trend == "declining"
+            or progression == "concerning"
+        )
+    ):
+        signals.append(
+            "monthly_load_low_with_concern"
+        )
+
+    if recovery_assessment == "concerning":
+        signals.append(
+            "monthly_recovery_concerning"
+        )
+
+    if progression == "concerning":
+        signals.append(
+            "monthly_progression_concerning"
+        )
+
+    return signals
 
 
 def check_plan_reassessment_needed(
@@ -87,41 +132,16 @@ def check_plan_reassessment_needed(
             review.review_json
         )
 
-        signals = []
-
-        if review.assessment == "concerning":
-            signals.append(
-                "monthly_assessment_concerning"
-            )
-
-        if review.trend == "declining":
-            signals.append(
-                "monthly_trend_declining"
-            )
-
-        if (
-            review.load_assessment
-            in {"high", "low"}
-        ):
-            signals.append(
-                "monthly_load_not_appropriate"
-            )
-
-        if (
-            review.recovery_assessment
-            in {"concerning"}
-        ):
-            signals.append(
-                "monthly_recovery_concerning"
-            )
-
-        if (
-            details.get("progression")
-            == "concerning"
-        ):
-            signals.append(
-                "monthly_progression_concerning"
-            )
+        signals = _reassessment_signals(
+            assessment=review.assessment,
+            trend=review.trend,
+            load_assessment=
+                review.load_assessment,
+            recovery_assessment=
+                review.recovery_assessment,
+            progression=
+                details.get("progression"),
+        )
 
         return {
             "needed": bool(signals),
@@ -155,6 +175,30 @@ def create_plan_reassessment_recommendation(
     )
 
     if not result["needed"]:
+        plan_id = result.get(
+            "training_plan_id"
+        )
+
+        if plan_id is not None:
+            with SessionLocal() as session:
+                stale_rows = session.scalars(
+                    select(CoachRecommendation)
+                    .where(
+                        CoachRecommendation.type
+                        == "monthly_plan_reassessment",
+                        CoachRecommendation.status
+                        == "pending",
+                        CoachRecommendation.training_plan_id
+                        == plan_id,
+                    )
+                ).all()
+
+                for stale in stale_rows:
+                    stale.status = "rejected"
+
+                if stale_rows:
+                    session.commit()
+
         return {
             **result,
             "recommendation_created": False,
