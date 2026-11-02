@@ -21,9 +21,12 @@ from stream_signal_quality import (
 from recovery_context import (
     build_recovery_context,
 )
+from heart_rate_zones import (
+    get_configured_heart_rate_zones,
+)
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "6"
+PROMPT_VERSION = "9"
 
 
 class WorkoutAnalysisResult(BaseModel):
@@ -144,17 +147,23 @@ def build_detailed_workout_analysis_input(
         for name, quality
         in cleaned.quality.items()
     }
-    # V2 zunächst nur für nicht-intervallartige Einheiten.
-    data["phase_metrics"] = (
-    analyze_workout_phases(
-        warmup=planned["warmup"],
-        repeat=planned["repeat"],
-        work=planned["work"],
-        recovery=planned["recovery"],
-        cooldown=planned["cooldown"],
-        streams=streams,
+
+    heart_rate_zones = (
+        get_configured_heart_rate_zones()
     )
-)
+
+    data["phase_metrics"] = (
+        analyze_workout_phases(
+            warmup=planned["warmup"],
+            repeat=planned["repeat"],
+            work=planned["work"],
+            recovery=planned["recovery"],
+            cooldown=planned["cooldown"],
+            streams=streams,
+            heart_rate_zones=
+                heart_rate_zones,
+        )
+    )
 
     return data
 
@@ -428,6 +437,85 @@ und second_half_* Feldern zu bevorzugen.
 Die Trendwerte sind deskriptiv und stellen für sich
 allein keine Bewertung als gut oder schlecht dar.
 
+heart_rate_zones enthält die deterministisch aus den
+persönlich konfigurierten Herzfrequenzbereichen
+berechnete Verteilung der Herzfrequenz innerhalb der
+jeweiligen tatsächlichen Trainingsphase.
+
+Die Zonen basieren auf dem persönlichen Athletenprofil.
+Bei der aktuell verwendeten Methode max_hr entsprechen
+sie prozentualen Bereichen der individuell
+konfigurierten maximalen Herzfrequenz.
+
+distribution enthält für jede Zone die Dauer in
+Sekunden und den prozentualen Anteil der Phase.
+dominant_zone bezeichnet die Zone mit dem größten
+Zeitanteil.
+
+Die Zonen sind eine Beschreibung der physiologischen
+Beanspruchung und nicht automatisch eine Bewertung der
+Trainingsausführung.
+
+Leite insbesondere NICHT allein aus einem Aufenthalt in
+einer höheren Herzfrequenzzone ab, dass eine Einheit zu
+hart oder schlecht ausgeführt wurde.
+
+Bewerte die Herzfrequenzzonen zusammen mit:
+- Trainingsart und geplanter Struktur
+- Leistung und Leistungsvorgabe
+- power_trend
+- heart_rate_trend
+- sofern interpretierbar der Herzfrequenzdrift
+- bei Intervallen der Herzfrequenzerholung
+- dem Recovery-Kontext
+
+Bei kontinuierlichen Einheiten kann eine Verschiebung
+der Herzfrequenz in höhere Zonen bei gleichzeitig
+stabiler Leistung eine zunehmende kardiovaskuläre
+Beanspruchung im Verlauf anzeigen.
+
+Formuliere dies zunächst deskriptiv. Eine solche
+Verschiebung ist für sich allein weder ein
+Regenerationsproblem noch eine schlechte
+Trainingsausführung.
+
+Bei kurzen Arbeitsintervallen ist zu berücksichtigen,
+dass die Herzfrequenz verzögert auf eine Änderung der
+Belastung reagiert. Die Herzfrequenzzone eines einzelnen
+kurzen Intervalls darf deshalb nicht isoliert zur
+Bewertung seiner Intensität verwendet werden.
+
+Bei Recovery-Phasen ist die Veränderung der
+Herzfrequenz und INTERVAL_RECOVERY aussagekräftiger als
+die dominante Herzfrequenzzone allein.
+
+below_zone und above_zone beschreiben Messwerte
+außerhalb der konfigurierten Zonen. Sie sind nicht
+automatisch als auffällig zu bewerten.
+
+Nutze konkrete Zonenanteile nur dann im nutzerseitigen
+Text, wenn sie für die Beurteilung der Einheit relevant
+sind. Wiederhole nicht lediglich die vollständige
+Zonenverteilung.
+
+Wenn bei einer kontinuierlichen work-Phase die Leistung
+im Zielbereich und weitgehend stabil bleibt, während
+sich die Herzfrequenz im Verlauf erkennbar in höhere
+Zonen verschiebt, nenne die wesentlichen Zonenanteile,
+wenn sie die zunehmende kardiovaskuläre Beanspruchung
+konkret verständlich machen.
+
+Beispielsweise kann bei überwiegendem Aufenthalt in
+zone_2 mit einem relevanten Anteil in zone_3 beschrieben
+werden, dass die Einheit überwiegend im leichteren
+Herzfrequenzbereich lag, die kardiovaskuläre
+Beanspruchung im Verlauf jedoch zunahm.
+
+Bewerte einen solchen zone_3-Anteil nicht automatisch
+als zu hohe Intensität. Entscheidend ist der
+Zusammenhang mit Leistungsvorgabe, Leistungsverlauf,
+Herzfrequenzverlauf und Trainingsart.
+
 heart_rate_drift_bpm und heart_rate_drift_percent
 beschreiben die Veränderung der Herzfrequenz im
 zeitlichen Verlauf einer Phase. Die Berechnung
@@ -542,11 +630,25 @@ LOW oder UNBALANCED oder ein auffälliger
 Sleep-Stresswert darf allein NICHT zu
 recovery_concern=true führen.
 
-recovery_concern aufgrund des RECOVERY_CONTEXT
-erfordert mehrere übereinstimmende auffällige
-Recovery-Signale oder ein auffälliges Recovery-Signal
-zusammen mit einer dazu passenden auffälligen
-Trainingsreaktion.
+Mehrere auffällige Kennzahlen derselben Nacht sind nicht
+automatisch mehrere unabhängige Recovery-Signale.
+
+Schlafdauer, Sleep Score, HRV-Status, Ruhepuls und
+Sleep-Stress können miteinander zusammenhängen und
+dürfen nicht allein durch ihre Anzahl zu
+recovery_concern=true führen.
+
+Wenn die Trainingsreaktion trotz solcher nächtlichen
+Hinweise unauffällig ist, insbesondere wenn Leistung,
+Herzfrequenzverlauf und bei Intervallen die
+Herzfrequenzerholung keine konsistent auffällige
+Reaktion zeigen, soll recovery_concern grundsätzlich
+false bleiben.
+
+recovery_concern=true erfordert entweder eine zur
+Recovery-Situation passende auffällige Trainingsreaktion
+oder ein deutliches, über mehrere Tage erkennbares
+Recovery-Muster.
 
 Eine normale oder gute Trainingsausführung, stabile
 Leistung und unauffällige Herzfrequenzerholung dürfen

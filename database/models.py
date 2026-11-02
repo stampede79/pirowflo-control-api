@@ -17,6 +17,68 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database.engine import Base
 
+class AthleteProfile(Base):
+    __tablename__ = "athlete_profiles"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    max_heart_rate: Mapped[int | None] = mapped_column(
+        Integer,
+    )
+
+    heart_rate_zone_method: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="max_hr",
+    )
+
+    zone_1_min_percent: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=50.0,
+    )
+
+    zone_2_min_percent: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=60.0,
+    )
+
+    zone_3_min_percent: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=70.0,
+    )
+
+    zone_4_min_percent: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=80.0,
+    )
+
+    zone_5_min_percent: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=90.0,
+    )
+
+    weight_kg: Mapped[float | None] = mapped_column(
+        Float,
+    )
+
+    resting_heart_rate: Mapped[int | None] = mapped_column(
+        Integer,
+    )
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        default=datetime.now,
+        onupdate=datetime.now,
+    )
 
 class TrainingPlan(Base):
     __tablename__ = "training_plans"

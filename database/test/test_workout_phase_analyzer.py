@@ -9,6 +9,9 @@ from workout_phase_analyzer import (
     _max_rolling_average,
     analyze_workout_phases,
 )
+from heart_rate_zones import (
+    build_heart_rate_zones,
+)
 
 START = datetime(
     2026,
@@ -435,4 +438,95 @@ def test_interval_recovery_uses_work_peak_and_end_windows():
             "heart_rate_recovery_bpm"
         ]
         == 25.0
+    )
+
+def test_phase_metrics_include_heart_rate_zones():
+    zones = build_heart_rate_zones(
+        max_heart_rate=196,
+        zone_1_min_percent=50.0,
+        zone_2_min_percent=60.0,
+        zone_3_min_percent=70.0,
+        zone_4_min_percent=80.0,
+        zone_5_min_percent=90.0,
+    )
+
+    heart_rate = (
+        [110] * 60
+        + [130] * 120
+        + [145] * 120
+    )
+
+    result = _phase_metrics(
+        name="work_1",
+        start_seconds=0,
+        end_seconds=300,
+        stream_start=START,
+        streams={
+            "power":
+                stream([105] * 300),
+            "heart_rate":
+                stream(heart_rate),
+            "cadence":
+                stream([17] * 300),
+        },
+        heart_rate_zones=zones,
+    )
+
+    zone_metrics = result[
+        "heart_rate_zones"
+    ]
+
+    assert zone_metrics is not None
+
+    assert (
+        zone_metrics["sample_count"]
+        == 300
+    )
+
+    assert (
+        zone_metrics["dominant_zone"]
+        == "zone_2"
+    )
+
+    assert (
+        zone_metrics[
+            "distribution"
+        ]["zone_1"]["seconds"]
+        == 60
+    )
+
+    assert (
+        zone_metrics[
+            "distribution"
+        ]["zone_2"]["seconds"]
+        == 120
+    )
+
+    assert (
+        zone_metrics[
+            "distribution"
+        ]["zone_3"]["seconds"]
+        == 120
+    )
+
+
+def test_phase_metrics_without_heart_rate_zones():
+    result = _phase_metrics(
+        name="work_1",
+        start_seconds=0,
+        end_seconds=60,
+        stream_start=START,
+        streams={
+            "power":
+                stream([105] * 60),
+            "heart_rate":
+                stream([130] * 60),
+            "cadence":
+                stream([17] * 60),
+        },
+    )
+
+    assert (
+        result["heart_rate_zones"]
+        is None
     )

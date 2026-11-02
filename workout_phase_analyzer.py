@@ -4,6 +4,10 @@ from datetime import datetime
 from statistics import mean
 from typing import Any
 from statistics import mean, pstdev
+from heart_rate_zones import (
+    HeartRateZone,
+    analyze_heart_rate_zones,
+)
 
 
 def _parse_duration(value: str | None) -> int:
@@ -199,6 +203,9 @@ def _phase_metrics(
         float,
         float,
     ] | None = None,
+    heart_rate_zones: list[
+        HeartRateZone
+    ] | None = None,
 ) -> dict[str, Any]:
     power = _values_for_range(
         streams["power"],
@@ -212,6 +219,15 @@ def _phase_metrics(
         stream_start,
         start_seconds,
         end_seconds,
+    )
+
+    heart_rate_zone_metrics = (
+        analyze_heart_rate_zones(
+            heart_rate,
+            heart_rate_zones,
+        )
+        if heart_rate_zones
+        else None
     )
 
     cadence = _values_for_range(
@@ -333,6 +349,8 @@ def _phase_metrics(
             if heart_rate
             else None
         ),
+        "heart_rate_zones":
+            heart_rate_zone_metrics,
         "average_spm":
             _average(cadence),
         "first_half_average_power":
@@ -633,6 +651,9 @@ def analyze_workout_phases(
         str,
         list[dict[str, Any]],
     ],
+    heart_rate_zones: list[
+        HeartRateZone
+    ] | None = None,
 ) -> dict[str, Any]:
     available_streams = [
         points
@@ -681,6 +702,8 @@ def analyze_workout_phases(
                 ),
                 stream_start=stream_start,
                 streams=streams,
+                heart_rate_zones=
+                    heart_rate_zones,
             )
         )
 
@@ -702,6 +725,8 @@ def analyze_workout_phases(
                 target_power=_target_power(
                     work
                 ),
+                heart_rate_zones=
+                    heart_rate_zones,
             )
         )
 
@@ -725,6 +750,8 @@ def analyze_workout_phases(
                     target_power=_target_power(
                         recovery
                     ),
+                    heart_rate_zones=
+                        heart_rate_zones,
                 )
             )
 
@@ -740,6 +767,8 @@ def analyze_workout_phases(
                 ),
                 stream_start=stream_start,
                 streams=streams,
+                heart_rate_zones=
+                    heart_rate_zones,
             )
         )
 
