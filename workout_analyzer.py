@@ -603,6 +603,15 @@ und den Leistungsverlauf innerhalb der Phase.
                 result.model_dump(),
                 ensure_ascii=False,
             ),
+            metrics_json=json.dumps(
+                {
+                    "data_quality":
+                        input_data.get("data_quality"),
+                    "phase_metrics":
+                        input_data.get("phase_metrics"),
+                },
+                ensure_ascii=False,
+            ),
             model=MODEL,
             prompt_version=PROMPT_VERSION,
         )

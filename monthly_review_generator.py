@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from typing import Literal
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 
 
 class MonthlyReviewResult(BaseModel):
@@ -87,6 +87,285 @@ def _input_fingerprint(
         canonical.encode("utf-8")
     ).hexdigest()
 
+def _power_target_status(
+    average_power: float | None,
+    target_min: float | None,
+    target_max: float | None,
+) -> str:
+    if (
+        average_power is None
+        or target_min is None
+        or target_max is None
+    ):
+        return "unknown"
+
+    if average_power < target_min:
+        return "below_target"
+
+    if average_power > target_max:
+        return "above_target"
+
+    return "in_target"
+
+
+def _phase_number(
+    phase: dict,
+    prefix: str,
+) -> int:
+    name = phase.get("name", "")
+
+    try:
+        return int(
+            name.removeprefix(prefix)
+        )
+    except ValueError:
+        return 0
+
+
+def _continuous_work_metrics(
+    phases: list[dict],
+) -> dict | None:
+    work_phases = [
+        phase
+        for phase in phases
+        if phase.get("name", "").startswith("work_")
+    ]
+
+    if len(work_phases) != 1:
+        return None
+
+    phase = work_phases[0]
+
+    average_power = phase.get("average_power")
+    target_min = phase.get("target_power_min")
+    target_max = phase.get("target_power_max")
+
+    return {
+        "duration_minutes": round(
+            phase.get("duration_seconds", 0) / 60,
+            1,
+        ),
+        "average_power":
+            average_power,
+        "target_power_min":
+            target_min,
+        "target_power_max":
+            target_max,
+        "power_target_status":
+            _power_target_status(
+                average_power,
+                target_min,
+                target_max,
+            ),
+        "power_stddev":
+            phase.get("power_stddev"),
+        "power_trend":
+            phase.get("power_trend"),
+        "average_hr":
+            phase.get("average_hr"),
+        "max_hr":
+            phase.get("max_hr"),
+        "heart_rate_trend":
+            phase.get("heart_rate_trend"),
+        "heart_rate_drift_bpm":
+            phase.get("heart_rate_drift_bpm"),
+        "heart_rate_drift_interpretable":
+            phase.get(
+                "heart_rate_drift_interpretable"
+            ),
+        "average_spm":
+            phase.get("average_spm"),
+    }
+
+
+def _interval_work_metrics(
+    phases: list[dict],
+    interval_recovery: list[dict],
+) -> dict | None:
+    work_phases = sorted(
+        [
+            phase
+            for phase in phases
+            if phase.get("name", "").startswith(
+                "work_"
+            )
+        ],
+        key=lambda phase: _phase_number(
+            phase,
+            "work_",
+        ),
+    )
+
+    recovery_phases = sorted(
+        [
+            phase
+            for phase in phases
+            if phase.get("name", "").startswith(
+                "recovery_"
+            )
+        ],
+        key=lambda phase: _phase_number(
+            phase,
+            "recovery_",
+        ),
+    )
+
+    if len(work_phases) <= 1:
+        return None
+
+    def status(phase: dict) -> str:
+        return _power_target_status(
+            phase.get("average_power"),
+            phase.get("target_power_min"),
+            phase.get("target_power_max"),
+        )
+
+    work_statuses = [
+        status(phase)
+        for phase in work_phases
+    ]
+
+    recovery_statuses = [
+        status(phase)
+        for phase in recovery_phases
+    ]
+
+    work_powers = [
+        phase.get("average_power")
+        for phase in work_phases
+        if phase.get("average_power") is not None
+    ]
+
+    recovery_powers = [
+        phase.get("average_power")
+        for phase in recovery_phases
+        if phase.get("average_power") is not None
+    ]
+
+    hr_recoveries = [
+        item.get("heart_rate_recovery_bpm")
+        for item in interval_recovery
+        if item.get("heart_rate_recovery_bpm")
+        is not None
+    ]
+
+    return {
+        "repetitions":
+            len(work_phases),
+        "work_phases":
+            len(work_phases),
+        "work_in_target":
+            work_statuses.count("in_target"),
+        "work_below_target":
+            work_statuses.count("below_target"),
+        "work_above_target":
+            work_statuses.count("above_target"),
+        "average_work_power": (
+            round(
+                sum(work_powers)
+                / len(work_powers),
+                1,
+            )
+            if work_powers
+            else None
+        ),
+        "recovery_phases":
+            len(recovery_phases),
+        "recovery_in_target":
+            recovery_statuses.count("in_target"),
+        "recovery_below_target":
+            recovery_statuses.count(
+                "below_target"
+            ),
+        "recovery_above_target":
+            recovery_statuses.count(
+                "above_target"
+            ),
+        "average_recovery_power": (
+            round(
+                sum(recovery_powers)
+                / len(recovery_powers),
+                1,
+            )
+            if recovery_powers
+            else None
+        ),
+        "average_hr_recovery_bpm": (
+            round(
+                sum(hr_recoveries)
+                / len(hr_recoveries),
+                1,
+            )
+            if hr_recoveries
+            else None
+        ),
+    }
+
+def _workout_progression_item(
+    workout: Workout,
+    analysis: WorkoutAnalysis | None,
+) -> dict | None:
+    if (
+        analysis is None
+        or not analysis.metrics_json
+    ):
+        return None
+
+    try:
+        metrics = json.loads(
+            analysis.metrics_json
+        )
+    except json.JSONDecodeError:
+        return None
+
+    phase_metrics = (
+        metrics.get("phase_metrics") or {}
+    )
+
+    phases = (
+        phase_metrics.get("phases") or []
+    )
+
+    interval_recovery = (
+        phase_metrics.get("interval_recovery")
+        or []
+    )
+
+    interval = _interval_work_metrics(
+        phases,
+        interval_recovery,
+    )
+
+    if interval is not None:
+        return {
+            "date":
+                workout.scheduled_date.isoformat(),
+            "name":
+                workout.name,
+            "type":
+                "interval",
+            "metrics":
+                interval,
+        }
+
+    continuous = _continuous_work_metrics(
+        phases
+    )
+
+    if continuous is not None:
+        return {
+            "date":
+                workout.scheduled_date.isoformat(),
+            "name":
+                workout.name,
+            "type":
+                "continuous",
+            "metrics":
+                continuous,
+        }
+
+    return None
+
 def _month_range(
     year: int,
     month: int,
@@ -145,6 +424,82 @@ def _week_keys_for_month(
 
     return result
 
+def _completion_metrics(
+    workouts: list[Workout],
+) -> dict:
+    planned = len(workouts)
+
+    completed = sum(
+        1
+        for workout in workouts
+        if workout.status == "completed"
+    )
+
+    missed = sum(
+        1
+        for workout in workouts
+        if workout.status == "missed"
+    )
+
+    skipped = sum(
+        1
+        for workout in workouts
+        if workout.status == "skipped"
+    )
+
+    return {
+        "planned": planned,
+        "completed": completed,
+        "missed": missed,
+        "skipped": skipped,
+        "completion_percent": (
+            round(
+                completed / planned * 100,
+                1,
+            )
+            if planned
+            else None
+        ),
+    }
+
+
+def _weekly_completion_metrics(
+    workouts: list[Workout],
+) -> list[dict]:
+    weeks: dict[
+        tuple[int, int],
+        list[Workout],
+    ] = {}
+
+    for workout in workouts:
+        iso = workout.scheduled_date.isocalendar()
+
+        key = (
+            iso.year,
+            iso.week,
+        )
+
+        weeks.setdefault(
+            key,
+            [],
+        ).append(workout)
+
+    result = []
+
+    for (year, week), items in sorted(
+        weeks.items()
+    ):
+        metrics = _completion_metrics(items)
+
+        result.append(
+            {
+                "week": f"{year}-W{week:02d}",
+                **metrics,
+            }
+        )
+
+    return result
+
 
 def build_monthly_review_input(
     year: int,
@@ -181,6 +536,7 @@ def build_monthly_review_input(
         total_distance_meters = 0.0
 
         workout_items = []
+        training_progression = []
 
         for workout in workouts:
             if workout.status == "completed":
@@ -238,6 +594,7 @@ def build_monthly_review_input(
                         WorkoutAnalysis.created_at.desc()
                     )
                 )
+
 
             workout_items.append(
                 {
@@ -310,6 +667,16 @@ def build_monthly_review_input(
                 }
             )
 
+            progression_item = _workout_progression_item(
+                workout,
+                analysis,
+            )
+
+            if progression_item is not None:
+                training_progression.append(
+                    progression_item
+                )
+
         weekly_reviews = []
 
         for week_year, iso_week in sorted(
@@ -372,6 +739,16 @@ def build_monthly_review_input(
                 }
             )
 
+            completion_metrics = _completion_metrics(
+                workouts,
+            )
+
+            weekly_completion_metrics = (
+                _weekly_completion_metrics(
+                    workouts,
+                )
+            )
+
         return {
             "month":
                 f"{year}-{month:02d}",
@@ -406,12 +783,32 @@ def build_monthly_review_input(
                         2,
                     ),
             },
+            "monthly_metrics": {
+                "completion":
+                    completion_metrics,
+                "weekly_completion":
+                    weekly_completion_metrics,
+                "training_volume": {
+                    "duration_minutes": round(
+                        total_duration_seconds / 60,
+                        1,
+                    ),
+                    "distance_km": round(
+                        total_distance_meters / 1000,
+                        2,
+                    ),
+                    "completed_sessions":
+                        completed,
+                },
+                "training_progression":
+                    training_progression,
+            },
             "weekly_reviews":
                 weekly_reviews,
             "workouts":
                 workout_items,
         }
-    
+
 def generate_monthly_review(
     year: int,
     month: int,
@@ -468,6 +865,98 @@ Nutze Wochenreviews, um wiederkehrende Muster zu
 erkennen. Nutze Einzelanalysen für konkrete
 Beobachtungen. Wiederhole nicht lediglich die
 vorhandenen Texte.
+
+MONTHLY_METRICS enthält deterministisch berechnete
+Kennzahlen für den gesamten Trainingsmonat.
+
+completion beschreibt die Planumsetzung des gesamten
+Monats mit geplanten, absolvierten, verpassten und
+ausgelassenen Einheiten sowie der Erfüllungsquote.
+
+weekly_completion beschreibt dieselben Kennzahlen
+getrennt nach den tatsächlich vorhandenen
+Kalenderwochen.
+
+Nutze weekly_completion, um Veränderungen der
+Trainingskonsistenz im Monatsverlauf zu beurteilen.
+Beziehe dich dabei auf konkrete Kalenderwochen und
+nicht auf künstlich gebildete Monatsabschnitte.
+
+Nutze konkrete Zahlen, wenn sie eine Entwicklung
+verständlich machen. Eine Verbesserung der
+Planumsetzung darf beispielsweise beschrieben werden,
+wenn mehrere aufeinanderfolgende Kalenderwochen dies
+tatsächlich zeigen.
+
+training_volume beschreibt den tatsächlich
+absolvierten Trainingsumfang.
+
+training_progression enthält deterministisch aus den
+sekündlichen Trainingsdaten abgeleitete Kennzahlen
+der absolvierten Einheiten.
+
+Bei type=continuous beziehen sich die Werte auf den
+tatsächlichen Hauptteil der Einheit und nicht auf den
+Durchschnitt der gesamten Aktivität.
+
+Vergleiche absolute Leistungswerte nur dann direkt,
+wenn Trainingsart, Zielbereich und Struktur ausreichend
+vergleichbar sind. Eine niedrigere Leistung bei einem
+bewusst niedrigeren Zielbereich ist keine
+Verschlechterung.
+
+power_target_status beschreibt, ob die
+Durchschnittsleistung des Hauptteils innerhalb,
+unterhalb oder oberhalb des geplanten Zielbereichs lag.
+
+power_trend beschreibt die Leistungsentwicklung
+innerhalb des jeweiligen Hauptteils. Verwende
+wiederkehrende Veränderungen dieses Merkmals, um
+Aussagen über die Stabilität der Trainingsausführung
+im Monatsverlauf zu begründen.
+
+Bei type=interval beschreiben work_in_target,
+work_below_target und work_above_target die
+Zielgenauigkeit der tatsächlichen Arbeitsintervalle.
+
+recovery_in_target, recovery_below_target und
+recovery_above_target beschreiben entsprechend die
+Leistungssteuerung der geplanten Erholungsphasen.
+
+Nutze diese Daten, um Entwicklungen zwischen
+vergleichbaren Einheiten zu erkennen. Behaupte keinen
+Leistungsfortschritt allein aufgrund steigender
+absoluter Wattwerte.
+
+heart_rate_trend beschreibt den Herzfrequenzverlauf
+innerhalb einer Einheit und ist nicht gleichbedeutend
+mit einer Bewertung der Trainingsreaktion als gut oder
+schlecht.
+
+Formuliere insbesondere nicht, die Herzfrequenz sei
+stabil gewesen, wenn die zugrunde liegenden
+heart_rate_trend-Werte überwiegend rising sind.
+
+Technische heart_rate_drift-Werte dienen als
+Hintergrund für die Bewertung. Nenne sie im
+nutzerseitigen Monatsbericht nur dann numerisch,
+wenn der konkrete Zahlenwert für die
+Trainingssteuerung relevant ist.
+
+Bevorzuge ansonsten verständliche Formulierungen wie
+"die Herzfrequenz stieg im Verlauf trotz stabiler
+Leistung an".
+
+Wiederhole die Kennzahlen nicht lediglich als Liste,
+sondern nutze sie zur Begründung der Monatsbewertung.
+
+Eine Monatsanalyse soll Entwicklungen und Muster
+herausarbeiten und nicht lediglich die Wochenreviews
+und Einzelanalysen zusammenfassen.
+
+Begründe zentrale Aussagen nach Möglichkeit mit
+konkreten Zahlen oder mehreren übereinstimmenden
+Beobachtungen aus dem Monatsverlauf.
 
 Bewerte insbesondere:
 

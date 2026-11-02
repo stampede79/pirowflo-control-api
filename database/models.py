@@ -335,6 +335,10 @@ class WorkoutAnalysis(Base):
         nullable=False,
     )
 
+    metrics_json: Mapped[str | None] = mapped_column(
+        Text,
+    )
+
     model: Mapped[str] = mapped_column(
         String(100),
         nullable=False,
