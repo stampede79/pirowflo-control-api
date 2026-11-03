@@ -66,14 +66,26 @@ def main() -> int:
             iso_week,
         )
 
-        completed = input_data[
+        summary_metrics = input_data[
             "summary_metrics"
-        ]["completed_workouts"]
+        ]
 
-        if completed == 0:
+        completed = summary_metrics[
+            "completed_workouts"
+        ]
+
+        free_activities = summary_metrics[
+            "free_activities"
+        ]
+
+        total_training_sessions = (
+            completed + free_activities
+        )
+
+        if total_training_sessions == 0:
             print()
             print(
-                "Keine abgeschlossenen Trainings "
+                "Keine absolvierten Trainings "
                 "in dieser Woche."
             )
             print(

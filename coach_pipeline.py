@@ -6,6 +6,7 @@ from sqlalchemy import select
 from database.engine import SessionLocal
 from database.models import (
     Activity,
+    WeeklyReview,
     Workout,
     WorkoutActivityLink,
     WorkoutAnalysis,
@@ -19,6 +20,9 @@ from workout_analyzer import (
 )
 from calendar_recommendation_sync import (
     sync_calendar_recommendations,
+)
+from weekly_review_generator import (
+    generate_weekly_review,
 )
 
 
@@ -210,7 +214,63 @@ def run_pipeline() -> dict:
         )
 
         print()
-    print("4. Kalenderkonflikte prüfen")
+
+    print()
+    print("4. Aktuellen Wochenreview prüfen")
+
+    iso_calendar = now.date().isocalendar()
+
+    with SessionLocal() as session:
+        previous_weekly_id = session.scalar(
+            select(WeeklyReview.id)
+            .where(
+                WeeklyReview.year
+                == iso_calendar.year,
+                WeeklyReview.iso_week
+                == iso_calendar.week,
+            )
+            .order_by(
+                WeeklyReview.created_at.desc()
+            )
+            .limit(1)
+        )
+
+    weekly_review = generate_weekly_review(
+        iso_calendar.year,
+        iso_calendar.week,
+    )
+
+    weekly_created = (
+        previous_weekly_id
+        != weekly_review.id
+    )
+
+    if weekly_created:
+        openai_calls += 1
+
+    print(
+        "   Review #",
+        weekly_review.id,
+        sep="",
+    )
+
+    print(
+        "   Woche:",
+        f"{iso_calendar.year}-W"
+        f"{iso_calendar.week:02d}",
+    )
+
+    print(
+        "   Prompt-Version:",
+        weekly_review.prompt_version,
+    )
+
+    print(
+        "   Neu erzeugt:",
+        "ja" if weekly_created else "nein",
+    )
+
+    print("5. Kalenderkonflikte prüfen")
 
     calendar_start = now.date()
 

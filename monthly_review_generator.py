@@ -20,8 +20,13 @@ from openai import OpenAI
 from pydantic import BaseModel
 from typing import Literal
 
+from free_activity_context import (
+    get_free_activities,
+    serialize_free_activity,
+)
+
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 
 class MonthlyReviewResult(BaseModel):
@@ -527,6 +532,17 @@ def build_monthly_review_input(
             )
         ).all()
 
+        free_activities = get_free_activities(
+            session,
+            start,
+            end,
+        )
+
+        free_activity_items = [
+            serialize_free_activity(activity)
+            for activity in free_activities
+        ]
+
         completed = 0
         skipped = 0
         missed = 0
@@ -677,6 +693,17 @@ def build_monthly_review_input(
                     progression_item
                 )
 
+        for activity in free_activities:
+            if activity.duration_seconds is not None:
+                total_duration_seconds += (
+                    activity.duration_seconds
+                )
+
+            if activity.distance_meters is not None:
+                total_distance_meters += (
+                    activity.distance_meters
+                )
+
         weekly_reviews = []
 
         for week_year, iso_week in sorted(
@@ -782,6 +809,10 @@ def build_monthly_review_input(
                         / 1000,
                         2,
                     ),
+                 "free_activities":
+                    len(free_activities),
+                 "total_training_sessions":
+                    completed + len(free_activities),
             },
             "monthly_metrics": {
                 "completion":
@@ -797,8 +828,12 @@ def build_monthly_review_input(
                         total_distance_meters / 1000,
                         2,
                     ),
-                    "completed_sessions":
+                    "completed_planned_sessions":
                         completed,
+                    "free_sessions":
+                        len(free_activities),
+                    "total_training_sessions":
+                        completed + len(free_activities),
                 },
                 "training_progression":
                     training_progression,
@@ -807,6 +842,8 @@ def build_monthly_review_input(
                 weekly_reviews,
             "workouts":
                 workout_items,
+            "free_activities":
+                free_activity_items,
         }
 
 def generate_monthly_review(
@@ -1011,6 +1048,25 @@ Trainingsplan vor.
 
 Die Empfehlung soll eine Grundlage für die
 Trainingsplanung des Folgemonats bilden.
+
+FREE_ACTIVITIES enthält absolvierte Ruderaktivitäten,
+die keinem geplanten Workout zugeordnet sind.
+
+Diese freien Einheiten zählen zur tatsächlichen
+Trainingsbelastung, Trainingsdauer und Distanz des
+Monats.
+
+Sie zählen NICHT als absolvierte geplante Workouts und
+dürfen deshalb Planerfüllung oder Konsistenz der
+Planumsetzung nicht künstlich verbessern.
+
+Berücksichtige freie Einheiten insbesondere bei
+load_assessment, training_volume und der Bewertung der
+gesamten Monatsbelastung.
+
+Bewerte bei freien Einheiten nicht die Einhaltung
+geplanter Watt-, SPM-, Intervall- oder sonstiger
+Trainingsvorgaben, da keine solchen Vorgaben existieren.
 
 assessment:
 good, mixed, concerning oder unknown

@@ -20,9 +20,13 @@ from recovery_context import (
     build_recovery_summary,
 )
 from typing import Literal
+from free_activity_context import (
+    get_free_activities,
+    serialize_free_activity,
+)
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "4"
 
 
 class WeeklyReviewResult(BaseModel):
@@ -132,6 +136,17 @@ def build_weekly_review_input(
                 Workout.scheduled_date
             )
         ).all()
+
+        free_activities = get_free_activities(
+            session,
+            start,
+            end,
+        )
+
+        free_activity_items = [
+            serialize_free_activity(activity)
+            for activity in free_activities
+        ]
 
         items = []
 
@@ -280,6 +295,17 @@ def build_weekly_review_input(
                 }
             )
 
+        for activity in free_activities:
+            if activity.duration_seconds is not None:
+                total_duration_seconds += (
+                    activity.duration_seconds
+                )
+
+            if activity.distance_meters is not None:
+                total_distance_meters += (
+                    activity.distance_meters
+                )
+
         return {
             "week": (
                 f"{year}-W{iso_week:02d}"
@@ -309,8 +335,14 @@ def build_weekly_review_input(
                         total_distance_meters / 1000,
                         2,
                     ),
+                "free_activities":
+                    len(free_activities),
+                "total_training_sessions":
+                    completed + len(free_activities),
             },
             "workouts": items,
+            "free_activities":
+                free_activity_items,
             "recovery_summary":
                 recovery_summary,
         }
@@ -478,6 +510,39 @@ Berücksichtige missed Workouts bei der Bewertung
 der Umsetzung des Trainingsplans. Ein einzelnes
 missed Workout rechtfertigt jedoch nicht automatisch
 eine grundlegende Änderung des Trainingsplans.
+
+FREE_ACTIVITIES enthält absolvierte Ruderaktivitäten,
+die keinem geplanten Workout zugeordnet sind.
+
+Diese freien Einheiten zählen zur tatsächlichen
+Trainingsbelastung, Trainingsdauer und Distanz.
+
+Sie zählen NICHT als absolvierte geplante Workouts und
+dürfen deshalb die Planerfüllung oder Konsistenz der
+Planumsetzung nicht künstlich verbessern.
+
+Berücksichtige freie Einheiten insbesondere bei
+load_assessment und bei der Bewertung der gesamten
+Wochenbelastung.
+
+Bewerte bei freien Einheiten nicht, ob eine geplante
+Watt-, SPM- oder Intervallvorgabe eingehalten wurde,
+da für diese Einheiten keine solche Vorgabe existiert.
+
+Bei einer noch laufenden Woche dürfen geplante,
+aber noch nicht fällige Workouts nicht negativ in
+consistency, assessment oder trend eingehen.
+
+Wenn ein wesentlicher Teil der geplanten Woche noch
+offen ist und deshalb keine belastbare Aussage zur
+Planumsetzung möglich ist, verwende für consistency
+"unknown" statt "mixed" oder "poor".
+
+"mixed" oder "poor" bei consistency erfordert
+tatsächlich verpasste, ausgelassene oder deutlich
+unvollständig absolvierte geplante Einheiten und darf
+nicht allein aus noch offenen zukünftigen Workouts
+abgeleitet werden.
 
 assessment:
 - good
