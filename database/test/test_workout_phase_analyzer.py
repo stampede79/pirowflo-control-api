@@ -530,3 +530,121 @@ def test_phase_metrics_without_heart_rate_zones():
         result["heart_rate_zones"]
         is None
     )
+
+def test_free_activity_metrics_cover_full_stream():
+    from datetime import datetime, timedelta
+
+    from workout_phase_analyzer import (
+        analyze_free_activity_metrics,
+    )
+
+    start = datetime(
+        2026,
+        11,
+        3,
+        10,
+        0,
+        0,
+    )
+
+    streams = {
+        "power": [
+            {
+                "time": start + timedelta(seconds=i),
+                "value": 100,
+            }
+            for i in range(601)
+        ],
+        "heart_rate": [
+            {
+                "time": start + timedelta(seconds=i),
+                "value": 120,
+            }
+            for i in range(601)
+        ],
+        "cadence": [
+            {
+                "time": start + timedelta(seconds=i),
+                "value": 18,
+            }
+            for i in range(601)
+        ],
+    }
+
+    result = analyze_free_activity_metrics(
+        streams=streams,
+    )
+
+    assert result["name"] == "free_activity"
+    assert result["duration_seconds"] == 601
+    assert result["average_power"] == 100
+    assert result["average_hr"] == 120
+    assert result["average_spm"] == 18
+    assert result["power_trend"] == "stable"
+    assert result["heart_rate_trend"] == "stable"
+    assert (
+        result["heart_rate_drift_interpretable"]
+        is True
+    )
+
+
+def test_free_activity_drift_not_interpretable_when_power_changes():
+    from datetime import datetime, timedelta
+
+    from workout_phase_analyzer import (
+        analyze_free_activity_metrics,
+    )
+
+    start = datetime(
+        2026,
+        11,
+        3,
+        10,
+        0,
+        0,
+    )
+
+    power = [
+        80 if i < 300 else 120
+        for i in range(601)
+    ]
+
+    heart_rate = [
+        100 if i < 300 else 130
+        for i in range(601)
+    ]
+
+    streams = {
+        "power": [
+            {
+                "time": start + timedelta(seconds=i),
+                "value": value,
+            }
+            for i, value in enumerate(power)
+        ],
+        "heart_rate": [
+            {
+                "time": start + timedelta(seconds=i),
+                "value": value,
+            }
+            for i, value in enumerate(heart_rate)
+        ],
+        "cadence": [
+            {
+                "time": start + timedelta(seconds=i),
+                "value": 18,
+            }
+            for i in range(601)
+        ],
+    }
+
+    result = analyze_free_activity_metrics(
+        streams=streams,
+    )
+
+    assert result["power_trend"] == "rising"
+    assert result["heart_rate_trend"] == "rising"
+    assert (
+        result["heart_rate_drift_interpretable"]
+        is False
+    )

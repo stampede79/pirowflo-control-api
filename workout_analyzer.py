@@ -8,11 +8,13 @@ from pydantic import BaseModel
 from typing import Literal
 from database.engine import SessionLocal
 from database.models import (
+    Activity,
     WorkoutActivityLink,
     WorkoutAnalysis,
 )
 from endurain_client import EndurainClient
 from workout_phase_analyzer import (
+    analyze_free_activity_metrics,
     analyze_workout_phases,
 )
 from stream_signal_quality import (
@@ -24,6 +26,7 @@ from recovery_context import (
 from heart_rate_zones import (
     get_configured_heart_rate_zones,
 )
+
 
 MODEL = "gpt-6-luna"
 PROMPT_VERSION = "9"
@@ -66,23 +69,33 @@ def analyze_endurain_activity(
     endurain_activity_id: int,
 ) -> WorkoutAnalysis:
     with SessionLocal() as session:
+        activity = (
+            session.query(Activity)
+            .filter(
+                Activity.endurain_activity_id
+                == endurain_activity_id
+            )
+            .first()
+        )
+
+        if activity is None:
+            raise RuntimeError(
+                "Endurain activity "
+                f"{endurain_activity_id} not found"
+            )
+
         link = (
             session.query(WorkoutActivityLink)
-            .join(WorkoutActivityLink.activity)
             .filter(
-                WorkoutActivityLink.activity.has(
-                    endurain_activity_id=
-                        endurain_activity_id
-                )
+                WorkoutActivityLink.activity_id
+                == activity.id
             )
             .first()
         )
 
         if link is None:
-            raise RuntimeError(
-                "No confirmed workout link for "
-                f"Endurain activity "
-                f"{endurain_activity_id}"
+            return analyze_free_activity(
+                endurain_activity_id
             )
 
         link_id = link.id
@@ -246,6 +259,351 @@ def build_workout_analysis_input(
                     activity.average_spm,
             },
         }
+
+def build_free_activity_analysis_input(
+    endurain_activity_id: int,
+) -> dict:
+    with SessionLocal() as session:
+        activity = (
+            session.query(Activity)
+            .filter(
+                Activity.endurain_activity_id
+                == endurain_activity_id
+            )
+            .first()
+        )
+
+        if activity is None:
+            raise RuntimeError(
+                "Endurain activity "
+                f"{endurain_activity_id} not found"
+            )
+
+        if activity.workout_links:
+            raise RuntimeError(
+                "Activity is linked to a planned "
+                "workout and is not a free activity"
+            )
+
+        activity_date = activity.start_time.date()
+
+        actual_activity = {
+            "endurain_activity_id":
+                activity.endurain_activity_id,
+            "start_time":
+                activity.start_time.isoformat(),
+            "duration_minutes": (
+                round(
+                    activity.duration_seconds / 60,
+                    1,
+                )
+                if activity.duration_seconds
+                is not None
+                else None
+            ),
+            "distance_km": (
+                round(
+                    activity.distance_meters / 1000,
+                    2,
+                )
+                if activity.distance_meters
+                is not None
+                else None
+            ),
+            "average_power":
+                activity.average_power,
+            "normalized_power":
+                activity.normalized_power,
+            "average_hr":
+                activity.average_hr,
+            "max_hr":
+                activity.max_hr,
+            "average_spm":
+                activity.average_spm,
+        }
+
+    client = EndurainClient(
+        server=os.environ["ENDURAIN_SERVER"],
+        username=os.environ[
+            "ENDURAIN_USERNAME"
+        ],
+        password=os.environ[
+            "ENDURAIN_PASSWORD"
+        ],
+    )
+
+    streams = client.get_activity_streams(
+        endurain_activity_id
+    )
+
+    cleaned = clean_activity_streams(
+        streams
+    )
+
+    heart_rate_zones = (
+        get_configured_heart_rate_zones()
+    )
+
+    activity_metrics = (
+        analyze_free_activity_metrics(
+            streams=cleaned.streams,
+            heart_rate_zones=
+                heart_rate_zones,
+        )
+    )
+
+    sleep_records = client.get_sleep_records()
+
+    return {
+        "activity_type": "free",
+        "planned_workout": None,
+        "actual_activity": actual_activity,
+        "recovery_context":
+            build_recovery_context(
+                sleep_records,
+                activity_date,
+            ),
+        "data_quality": {
+            name: {
+                "raw_samples":
+                    quality.raw_samples,
+                "clean_samples":
+                    quality.clean_samples,
+                "excluded_samples":
+                    quality.excluded_samples,
+                "excluded_percent":
+                    quality.excluded_percent,
+                "quality":
+                    quality.quality,
+            }
+            for name, quality
+            in cleaned.quality.items()
+        },
+        "activity_metrics":
+             activity_metrics,
+    }
+
+def analyze_free_activity(
+    endurain_activity_id: int,
+) -> WorkoutAnalysis:
+    with SessionLocal() as session:
+        activity = (
+            session.query(Activity)
+            .filter(
+                Activity.endurain_activity_id
+                == endurain_activity_id
+            )
+            .first()
+        )
+
+        if activity is None:
+            raise RuntimeError(
+                "Endurain activity "
+                f"{endurain_activity_id} not found"
+            )
+
+        if activity.workout_links:
+            raise RuntimeError(
+                "Activity is linked to a planned "
+                "workout and is not a free activity"
+            )
+
+        existing = (
+            session.query(WorkoutAnalysis)
+            .filter(
+                WorkoutAnalysis.activity_id
+                == activity.id,
+                WorkoutAnalysis.workout_id.is_(None),
+                WorkoutAnalysis.model
+                == MODEL,
+                WorkoutAnalysis.prompt_version
+                == PROMPT_VERSION,
+            )
+            .order_by(
+                WorkoutAnalysis.created_at.desc()
+            )
+            .first()
+        )
+
+        if existing is not None:
+            return existing
+
+        activity_id = activity.id
+
+    input_data = (
+        build_free_activity_analysis_input(
+            endurain_activity_id
+        )
+    )
+
+    client = OpenAI(
+        api_key=os.environ["OPENAI_API_KEY"]
+    )
+
+    response = client.responses.parse(
+        model=MODEL,
+        input=[
+            {
+                "role": "system",
+                "content": """
+Du bist ein Trainingscoach für Indoor-Rudern.
+
+Analysiere genau eine frei absolvierte
+Rudereinheit.
+
+Für diese Einheit existiert keine geplante
+Trainingsvorgabe.
+
+Bewerte deshalb NICHT, ob Watt-, Dauer-,
+Intervall- oder Schlagzahlvorgaben erfüllt
+wurden.
+
+execution muss für freie Trainings immer
+"unknown" sein.
+
+Bewerte stattdessen die tatsächlich
+entstandene Trainingsbelastung.
+
+Berücksichtige insbesondere:
+- Dauer und Distanz
+- average_power und normalized_power
+- durchschnittliche und maximale Herzfrequenz
+- Schlagzahl
+- persönliche Herzfrequenzbereiche
+- Datenqualität
+- Recovery-Kontext
+
+ACTIVITY_METRICS enthält deterministisch aus
+den bereinigten Endurain-Streams berechnete
+Werte für die gesamte freie Einheit.
+
+power_trend und heart_rate_trend beschreiben
+den zeitlichen Verlauf der Einheit.
+
+heart_rate_zones enthält die tatsächliche
+Verteilung der Herzfrequenz über die persönlich
+konfigurierten Bereiche.
+
+heart_rate_drift_percent darf nur dann als
+kardiovaskuläre Drift interpretiert werden,
+wenn heart_rate_drift_interpretable=true ist.
+
+Bei heart_rate_drift_interpretable=false darf
+aus dem Drift-Wert keine entsprechende
+Bewertung abgeleitet werden.
+
+Bewerte eine höhere Herzfrequenzzone nicht
+isoliert als zu hohe Belastung. Berücksichtige
+Leistung, Leistungsverlauf, Dauer und
+Recovery-Kontext gemeinsam.
+
+Die intern berechneten first_half_* und
+second_half_* Werte dienen ausschließlich der
+Verlaufsanalyse. Bezeichne sie im nutzerseitigen
+Text nicht als erste oder zweite Hälfte.
+Formuliere stattdessen beispielsweise
+"im Verlauf der Einheit" oder
+"gegen Ende der Einheit".
+
+load_assessment beschreibt, ob die Belastung
+dieser zusätzlichen Einheit im vorhandenen
+Kontext niedrig, angemessen, hoch oder nicht
+beurteilbar erscheint.
+
+effort beschreibt den Charakter der
+tatsächlichen Belastung:
+- easy
+- moderate
+- hard
+- unknown
+
+progression darf aus einer einzelnen freien
+Einheit keine langfristige Entwicklung
+ableiten.
+
+Eine freie Einheit ist zusätzliche tatsächliche
+Trainingsbelastung. Sie erfüllt jedoch nicht
+automatisch ein geplantes Workout.
+
+Recovery-Daten sind zusätzlicher Kontext und
+keine medizinische Diagnose.
+
+Ein einzelner auffälliger Recovery-Wert darf
+nicht automatisch zu recovery_concern=true
+führen.
+
+Die Analyse soll sachlich, knapp und auf die
+Trainingssteuerung ausgerichtet sein.
+
+recommendation beschreibt die Konsequenz für
+die nächsten Einheiten, ohne selbst den
+Trainingsplan zu verändern.
+""",
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    input_data,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+            },
+        ],
+        text_format=WorkoutAnalysisResult,
+    )
+
+    result = response.output_parsed
+
+    if result is None:
+        raise RuntimeError(
+            "OpenAI returned no free activity "
+            "analysis"
+        )
+
+    # Freie Trainings besitzen per Definition
+    # keine Soll-Ausführung.
+    result.execution = "unknown"
+
+    with SessionLocal() as session:
+        analysis = WorkoutAnalysis(
+            workout_id=None,
+            activity_id=activity_id,
+            execution=result.execution,
+            load_assessment=
+                result.load_assessment,
+            effort=result.effort,
+            progression=result.progression,
+            recovery_concern=
+                result.recovery_concern,
+            summary=result.summary,
+            recommendation=
+                result.recommendation,
+            analysis_json=json.dumps(
+                result.model_dump(),
+                ensure_ascii=False,
+            ),
+            metrics_json=json.dumps(
+                {
+                    "data_quality":
+                        input_data.get(
+                            "data_quality"
+                        ),
+                    "activity_metrics":
+                        input_data.get(
+                            "activity_metrics"
+                        ),
+                },
+                ensure_ascii=False,
+            ),
+            model=MODEL,
+            prompt_version=PROMPT_VERSION,
+        )
+
+        session.add(analysis)
+        session.commit()
+        session.refresh(analysis)
+
+        return analysis
 
 def analyze_workout(
     link_id: int,

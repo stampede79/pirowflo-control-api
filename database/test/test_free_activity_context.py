@@ -9,6 +9,7 @@ from database.models import (
     TrainingPlan,
     Workout,
     WorkoutActivityLink,
+    WorkoutAnalysis,
 )
 from free_activity_context import (
     get_free_activities,
@@ -237,4 +238,59 @@ def test_serialize_free_activity():
         "average_hr": 130,
         "max_hr": 145,
         "average_spm": 17,
+        "analysis": None,
+    }
+
+def test_serialize_free_activity_with_analysis():
+    row = activity(
+        endurain_id=1131,
+        start_time=datetime(
+            2026,
+            11,
+            3,
+            9,
+            34,
+            57,
+        ),
+        duration_seconds=1128,
+        distance_meters=3663,
+    )
+
+    analysis = WorkoutAnalysis(
+        workout_id=None,
+        activity_id=1,
+        execution="unknown",
+        load_assessment="low",
+        effort="easy",
+        progression="unknown",
+        recovery_concern=False,
+        summary="Lockere zusätzliche Einheit.",
+        recommendation=(
+            "Die nächste Einheit wie geplant "
+            "absolvieren."
+        ),
+        analysis_json="{}",
+        metrics_json="{}",
+        model="gpt-6-luna",
+        prompt_version="9",
+    )
+
+    result = serialize_free_activity(
+        row,
+        analysis,
+    )
+
+    assert result["analysis"] == {
+        "execution": "unknown",
+        "load_assessment": "low",
+        "effort": "easy",
+        "progression": "unknown",
+        "recovery_concern": False,
+        "summary":
+            "Lockere zusätzliche Einheit.",
+        "recommendation": (
+            "Die nächste Einheit wie geplant "
+            "absolvieren."
+        ),
+        "prompt_version": "9",
     }

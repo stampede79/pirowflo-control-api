@@ -22,11 +22,12 @@ from typing import Literal
 
 from free_activity_context import (
     get_free_activities,
+    get_free_activity_analysis,
     serialize_free_activity,
 )
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "4"
+PROMPT_VERSION = "6"
 
 
 class MonthlyReviewResult(BaseModel):
@@ -431,6 +432,8 @@ def _week_keys_for_month(
 
 def _completion_metrics(
     workouts: list[Workout],
+    *,
+    as_of: date,
 ) -> dict:
     planned = len(workouts)
 
@@ -452,24 +455,55 @@ def _completion_metrics(
         if workout.status == "skipped"
     )
 
+    open_workouts = sum(
+        1
+        for workout in workouts
+        if workout.status == "planned"
+    )
+
+    due_workouts = [
+        workout
+        for workout in workouts
+        if (
+            workout.scheduled_date < as_of
+            or workout.status
+            in {
+                "completed",
+                "missed",
+                "skipped",
+            }
+        )
+    ]
+
+    due = len(due_workouts)
+
+    due_completed = sum(
+        1
+        for workout in due_workouts
+        if workout.status == "completed"
+    )
+
     return {
         "planned": planned,
+        "due": due,
         "completed": completed,
         "missed": missed,
         "skipped": skipped,
+        "open": open_workouts,
         "completion_percent": (
             round(
-                completed / planned * 100,
+                due_completed / due * 100,
                 1,
             )
-            if planned
+            if due
             else None
         ),
     }
 
-
 def _weekly_completion_metrics(
     workouts: list[Workout],
+    *,
+    as_of: date,
 ) -> list[dict]:
     weeks: dict[
         tuple[int, int],
@@ -494,7 +528,10 @@ def _weekly_completion_metrics(
     for (year, week), items in sorted(
         weeks.items()
     ):
-        metrics = _completion_metrics(items)
+        metrics = _completion_metrics(
+            items,
+            as_of=as_of,
+        )
 
         result.append(
             {
@@ -513,6 +550,12 @@ def build_monthly_review_input(
     start, end = _month_range(
         year,
         month,
+    )
+    today = date.today()
+
+    as_of = min(
+        today,
+        end - timedelta(days=1),
     )
 
     week_keys = _week_keys_for_month(
@@ -539,7 +582,13 @@ def build_monthly_review_input(
         )
 
         free_activity_items = [
-            serialize_free_activity(activity)
+            serialize_free_activity(
+                activity,
+                get_free_activity_analysis(
+                    session,
+                    activity,
+                ),
+            )
             for activity in free_activities
         ]
 
@@ -768,11 +817,13 @@ def build_monthly_review_input(
 
             completion_metrics = _completion_metrics(
                 workouts,
+                as_of=as_of,
             )
 
             weekly_completion_metrics = (
                 _weekly_completion_metrics(
                     workouts,
+                    as_of=as_of,
                 )
             )
 
@@ -906,18 +957,35 @@ vorhandenen Texte.
 MONTHLY_METRICS enthält deterministisch berechnete
 Kennzahlen für den gesamten Trainingsmonat.
 
-completion beschreibt die Planumsetzung des gesamten
-Monats mit geplanten, absolvierten, verpassten und
-ausgelassenen Einheiten sowie der Erfüllungsquote.
+completion beschreibt den Trainingsplan des Monats
+und die bis zum Stichtag bewertbare Planumsetzung.
 
-weekly_completion beschreibt dieselben Kennzahlen
+planned bezeichnet alle für den Monat geplanten
+Workouts.
+
+due bezeichnet die bis zum Stichtag bereits fälligen
+oder bereits abgeschlossenen, ausgelassenen bzw.
+verpassten Workouts.
+
+open bezeichnet weiterhin offene geplante Workouts.
+
+completion_percent wird ausschließlich aus den
+bereits fälligen Einheiten berechnet. Zukünftige
+offene Workouts verschlechtern diese Quote nicht.
+
+weekly_completion enthält dieselben Kennzahlen
 getrennt nach den tatsächlich vorhandenen
 Kalenderwochen.
 
+Zukünftige Wochen mit due=0 dürfen nicht als
+0-Prozent-Wochen oder als Verschlechterung der
+Trainingskonsistenz interpretiert werden.
+
 Nutze weekly_completion, um Veränderungen der
 Trainingskonsistenz im Monatsverlauf zu beurteilen.
-Beziehe dich dabei auf konkrete Kalenderwochen und
-nicht auf künstlich gebildete Monatsabschnitte.
+Beziehe dich dabei auf konkrete bereits bewertbare
+Kalenderwochen und nicht auf künstlich gebildete
+Monatsabschnitte.
 
 Nutze konkrete Zahlen, wenn sie eine Entwicklung
 verständlich machen. Eine Verbesserung der
@@ -1067,6 +1135,56 @@ gesamten Monatsbelastung.
 Bewerte bei freien Einheiten nicht die Einhaltung
 geplanter Watt-, SPM-, Intervall- oder sonstiger
 Trainingsvorgaben, da keine solchen Vorgaben existieren.
+
+FREE_ACTIVITIES können eine analysis enthalten.
+
+Wenn eine Analyse vorhanden ist, berücksichtige
+deren load_assessment, effort, progression,
+recovery_concern und summary bei der Bewertung
+der tatsächlichen Trainingsbelastung.
+
+Freie Trainings zählen zur tatsächlichen
+Trainingsbelastung und können für Belastungs-,
+Recovery- und Entwicklungstrends relevant sein.
+
+Sie zählen jedoch weiterhin NICHT als Erfüllung
+eines geplanten Workouts.
+
+Leite aus zusätzlichen freien Trainings nicht
+automatisch eine höhere zukünftige
+Trainingskapazität ab.
+
+Ein höheres tatsächliches Trainingsvolumen
+rechtfertigt für sich allein keine Erhöhung des
+geplanten Trainingsumfangs.
+
+Bei einem noch laufenden Monat dürfen geplante,
+aber noch nicht fällige Workouts nicht negativ in
+consistency, assessment, trend oder load_assessment
+eingehen.
+
+Workouts mit status="planned" sind offene Einheiten.
+Sie sind weder missed noch skipped und dürfen nicht
+als fehlende Planumsetzung bewertet werden.
+
+Insbesondere dürfen zukünftige Kalenderwochen mit
+noch offenen geplanten Workouts nicht als Wochen mit
+0 % Planerfüllung oder als Rückgang der Konsistenz
+interpretiert werden.
+
+Bewerte die bisherige Planumsetzung eines laufenden
+Monats ausschließlich anhand bereits fälliger
+Einheiten.
+
+Wenn ein wesentlicher Teil des Monats noch offen ist
+und deshalb keine belastbare Aussage über Konsistenz,
+Trend oder Gesamtbelastung möglich ist, verwende
+"unknown", "unclear" oder "unknown" entsprechend
+der jeweiligen Ausgabekategorie.
+
+Ein niedriger bisheriger Trainingsumfang zu Beginn
+eines laufenden Monats ist nicht automatisch eine
+zu niedrige Monatsbelastung.
 
 assessment:
 good, mixed, concerning oder unknown

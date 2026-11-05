@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from database.models import (
     Activity,
     WorkoutActivityLink,
+    WorkoutAnalysis,
 )
 
 
@@ -49,6 +50,7 @@ def get_free_activities(
 
 def serialize_free_activity(
     activity: Activity,
+    analysis: WorkoutAnalysis | None = None,
 ) -> dict:
     return {
         "date":
@@ -85,4 +87,44 @@ def serialize_free_activity(
             activity.max_hr,
         "average_spm":
             activity.average_spm,
+        "analysis": (
+            {
+                "execution":
+                    analysis.execution,
+                "load_assessment":
+                    analysis.load_assessment,
+                "effort":
+                    analysis.effort,
+                "progression":
+                    analysis.progression,
+                "recovery_concern":
+                    analysis.recovery_concern,
+                "summary":
+                    analysis.summary,
+                "recommendation":
+                    analysis.recommendation,
+                "prompt_version":
+                    analysis.prompt_version,
+            }
+            if analysis is not None
+            else None
+        ),
     }
+
+def get_free_activity_analysis(
+    session: Session,
+    activity: Activity,
+) -> WorkoutAnalysis | None:
+    return session.scalar(
+        select(WorkoutAnalysis)
+        .where(
+            WorkoutAnalysis.activity_id
+            == activity.id,
+            WorkoutAnalysis.workout_id
+            .is_(None),
+        )
+        .order_by(
+            WorkoutAnalysis.created_at.desc()
+        )
+        .limit(1)
+    )

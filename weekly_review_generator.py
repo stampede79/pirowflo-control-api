@@ -22,11 +22,12 @@ from recovery_context import (
 from typing import Literal
 from free_activity_context import (
     get_free_activities,
+    get_free_activity_analysis,
     serialize_free_activity,
 )
 
 MODEL = "gpt-6-luna"
-PROMPT_VERSION = "4"
+PROMPT_VERSION = "5"
 
 
 class WeeklyReviewResult(BaseModel):
@@ -144,7 +145,13 @@ def build_weekly_review_input(
         )
 
         free_activity_items = [
-            serialize_free_activity(activity)
+            serialize_free_activity(
+                activity,
+                get_free_activity_analysis(
+                    session,
+                    activity,
+                ),
+            )
             for activity in free_activities
         ]
 
@@ -528,6 +535,28 @@ Wochenbelastung.
 Bewerte bei freien Einheiten nicht, ob eine geplante
 Watt-, SPM- oder Intervallvorgabe eingehalten wurde,
 da für diese Einheiten keine solche Vorgabe existiert.
+
+FREE_ACTIVITIES können eine analysis enthalten.
+
+Wenn eine Analyse vorhanden ist, berücksichtige
+deren load_assessment, effort, progression,
+recovery_concern und summary bei der Bewertung
+der tatsächlichen Trainingsbelastung.
+
+Freie Trainings zählen zur tatsächlichen
+Trainingsbelastung und können für Belastungs-,
+Recovery- und Entwicklungstrends relevant sein.
+
+Sie zählen jedoch weiterhin NICHT als Erfüllung
+eines geplanten Workouts.
+
+Leite aus zusätzlichen freien Trainings nicht
+automatisch eine höhere zukünftige
+Trainingskapazität ab.
+
+Ein höheres tatsächliches Trainingsvolumen
+rechtfertigt für sich allein keine Erhöhung des
+geplanten Trainingsumfangs.
 
 Bei einer noch laufenden Woche dürfen geplante,
 aber noch nicht fällige Workouts nicht negativ in

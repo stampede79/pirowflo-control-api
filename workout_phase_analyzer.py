@@ -318,13 +318,14 @@ def _phase_metrics(
         else None
     )
 
-    is_work_phase = (
-    name == "work"
-    or name.startswith("work_")
-)
+    is_continuous_effort = (
+        name == "work"
+        or name.startswith("work_")
+        or name == "free_activity"
+    )
 
     heart_rate_drift_interpretable = (
-        is_work_phase
+        is_continuous_effort
         and end_seconds - start_seconds >= 600
         and first_half_power is not None
         and second_half_power is not None
@@ -333,6 +334,7 @@ def _phase_metrics(
         and power_change_percent is not None
         and abs(power_change_percent) <= 5.0
     )
+
 
     result: dict[str, Any] = {
         "name": name,
@@ -417,6 +419,56 @@ def _phase_metrics(
 
     return result
 
+def analyze_free_activity_metrics(
+    *,
+    streams: dict[
+        str,
+        list[dict[str, Any]],
+    ],
+    heart_rate_zones: list[
+        HeartRateZone
+    ] | None = None,
+) -> dict[str, Any]:
+    available_streams = [
+        points
+        for points in streams.values()
+        if points
+    ]
+
+    if not available_streams:
+        raise RuntimeError(
+            "No activity streams available"
+        )
+
+    stream_start = min(
+        points[0]["time"]
+        for points in available_streams
+    )
+
+    stream_end = max(
+        points[-1]["time"]
+        for points in available_streams
+    )
+
+    duration_seconds = max(
+        1,
+        int(
+            (
+                stream_end
+                - stream_start
+            ).total_seconds()
+        )
+        + 1,
+    )
+
+    return _phase_metrics(
+        name="free_activity",
+        start_seconds=0,
+        end_seconds=duration_seconds,
+        stream_start=stream_start,
+        streams=streams,
+        heart_rate_zones=heart_rate_zones,
+    )
 
 def analyze_simple_workout_phases(
     *,

@@ -43,6 +43,32 @@ def _duration_difference(
         - activity.duration_seconds
     )
 
+def _serialize_analysis(
+    analysis: WorkoutAnalysis | None,
+) -> dict | None:
+    if analysis is None:
+        return None
+
+    return {
+        "id": analysis.id,
+        "prompt_version":
+            analysis.prompt_version,
+        "model": analysis.model,
+        "execution":
+            analysis.execution,
+        "load_assessment":
+            analysis.load_assessment,
+        "effort":
+            analysis.effort,
+        "progression":
+            analysis.progression,
+        "recovery_concern":
+            analysis.recovery_concern,
+        "summary":
+            analysis.summary,
+        "recommendation":
+            analysis.recommendation,
+    }
 
 def build_training_history(
     start: date,
@@ -177,32 +203,10 @@ def build_training_history(
                             is not None
                             else None
                         ),
-                        "analysis": (
-                            {
-                                "id":
-                                    analysis.id,
-                                "prompt_version":
-                                    analysis.prompt_version,
-                                "model":
-                                    analysis.model,
-                                "execution":
-                                    analysis.execution,
-                                "load_assessment":
-                                    analysis.load_assessment,
-                                "effort":
-                                    analysis.effort,
-                                "progression":
-                                    analysis.progression,
-                                "recovery_concern":
-                                    analysis.recovery_concern,
-                                "summary":
-                                    analysis.summary,
-                                "recommendation":
-                                    analysis.recommendation,
-                            }
-                            if analysis is not None
-                            else None
-                        ),                        
+                        "analysis":
+                            _serialize_analysis(
+                                analysis
+                            ),
                     }
                 )
 
@@ -300,6 +304,10 @@ def build_training_history(
             if activity.id in used_activity_ids:
                 continue
 
+            analysis = analyses_by_activity.get(
+                activity.id
+            )
+
             entries.append(
                 {
                     "type": "free",
@@ -309,7 +317,10 @@ def build_training_history(
                         serialize_activity(
                             activity,
                         ),
-                    "analysis": None,
+                    "analysis":
+                        _serialize_analysis(
+                            analysis
+                        ),
                 }
             )
 

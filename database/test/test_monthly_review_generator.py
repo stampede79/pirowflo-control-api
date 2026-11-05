@@ -3,10 +3,6 @@ from types import SimpleNamespace
 
 from monthly_review_generator import (
     _completion_metrics,
-    _weekly_completion_metrics,
-)
-from monthly_review_generator import (
-    _completion_metrics,
     _interval_work_metrics,
     _power_target_status,
     _weekly_completion_metrics,
@@ -39,57 +35,146 @@ def october_workouts():
 
 def test_completion_metrics():
     result = _completion_metrics(
-        october_workouts()
+        october_workouts(),
+        as_of=date(2026, 10, 31),
     )
 
     assert result == {
         "planned": 12,
+        "due": 12,
         "completed": 9,
         "missed": 3,
         "skipped": 0,
+        "open": 0,
         "completion_percent": 75.0,
     }
 
 
 def test_weekly_completion_metrics():
     result = _weekly_completion_metrics(
-        october_workouts()
+        october_workouts(),
+        as_of=date(2026, 10, 31),
     )
 
     assert result == [
         {
             "week": "2026-W41",
             "planned": 2,
+            "due": 2,
             "completed": 1,
             "missed": 1,
             "skipped": 0,
+            "open": 0,
             "completion_percent": 50.0,
         },
         {
             "week": "2026-W42",
             "planned": 4,
+            "due": 4,
             "completed": 2,
             "missed": 2,
             "skipped": 0,
+            "open": 0,
             "completion_percent": 50.0,
         },
         {
             "week": "2026-W43",
             "planned": 3,
+            "due": 3,
             "completed": 3,
             "missed": 0,
             "skipped": 0,
+            "open": 0,
             "completion_percent": 100.0,
         },
         {
             "week": "2026-W44",
             "planned": 3,
+            "due": 3,
             "completed": 3,
             "missed": 0,
             "skipped": 0,
+            "open": 0,
             "completion_percent": 100.0,
         },
     ]
+
+def test_completion_metrics_ignore_future_open_workouts():
+    workouts = [
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 2),
+            status="completed",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 4),
+            status="completed",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 6),
+            status="planned",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 17),
+            status="planned",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 24),
+            status="planned",
+        ),
+    ]
+
+    result = _completion_metrics(
+        workouts,
+        as_of=date(2026, 11, 5),
+    )
+
+    assert result == {
+        "planned": 5,
+        "due": 2,
+        "completed": 2,
+        "missed": 0,
+        "skipped": 0,
+        "open": 3,
+        "completion_percent": 100.0,
+    }
+
+def test_weekly_completion_keeps_future_weeks_open():
+    workouts = [
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 2),
+            status="completed",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 4),
+            status="completed",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 17),
+            status="planned",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 19),
+            status="planned",
+        ),
+        SimpleNamespace(
+            scheduled_date=date(2026, 11, 21),
+            status="planned",
+        ),
+    ]
+
+    result = _weekly_completion_metrics(
+        workouts,
+        as_of=date(2026, 11, 5),
+    )
+
+    assert result[0]["completed"] == 2
+    assert result[0]["due"] == 2
+    assert result[0]["completion_percent"] == 100.0
+
+    assert result[1]["planned"] == 3
+    assert result[1]["due"] == 0
+    assert result[1]["open"] == 3
+    assert result[1]["completion_percent"] is None
 
 def test_power_target_status():
     assert (

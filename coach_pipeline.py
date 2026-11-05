@@ -31,62 +31,72 @@ SYNC_LOOKBACK_DAYS = 14
 
 def _activities_needing_analysis() -> list[int]:
     with SessionLocal() as session:
-        rows = session.execute(
-            select(
-                Activity.endurain_activity_id,
-                Workout.id,
-            )
-            .join(
-                WorkoutActivityLink,
-                WorkoutActivityLink.activity_id
-                == Activity.id,
-            )
-            .join(
-                Workout,
-                Workout.id
-                == WorkoutActivityLink.workout_id,
-            )
-            .where(
-                Workout.status == "completed"
-            )
-            .order_by(
-                Activity.start_time
-            )
+        activities = session.scalars(
+            select(Activity)
+            .order_by(Activity.start_time)
         ).all()
 
         result = []
 
-        for endurain_id, workout_id in rows:
-            activity = session.scalar(
-                select(Activity).where(
-                    Activity.endurain_activity_id
-                    == endurain_id
+        for activity in activities:
+            link = session.scalar(
+                select(WorkoutActivityLink)
+                .where(
+                    WorkoutActivityLink.activity_id
+                    == activity.id
                 )
+                .limit(1)
             )
 
-            if activity is None:
-                continue
-
-            existing = session.scalar(
-                select(WorkoutAnalysis).where(
-                    WorkoutAnalysis.workout_id
-                    == workout_id,
-                    WorkoutAnalysis.activity_id
-                    == activity.id,
-                    WorkoutAnalysis.model
-                    == MODEL,
-                    WorkoutAnalysis.prompt_version
-                    == PROMPT_VERSION,
+            if link is not None:
+                workout = session.get(
+                    Workout,
+                    link.workout_id,
                 )
-            )
+
+                if (
+                    workout is None
+                    or workout.status
+                    != "completed"
+                ):
+                    continue
+
+                existing = session.scalar(
+                    select(WorkoutAnalysis)
+                    .where(
+                        WorkoutAnalysis.workout_id
+                        == workout.id,
+                        WorkoutAnalysis.activity_id
+                        == activity.id,
+                        WorkoutAnalysis.model
+                        == MODEL,
+                        WorkoutAnalysis.prompt_version
+                        == PROMPT_VERSION,
+                    )
+                    .limit(1)
+                )
+            else:
+                existing = session.scalar(
+                    select(WorkoutAnalysis)
+                    .where(
+                        WorkoutAnalysis.workout_id
+                        .is_(None),
+                        WorkoutAnalysis.activity_id
+                        == activity.id,
+                        WorkoutAnalysis.model
+                        == MODEL,
+                        WorkoutAnalysis.prompt_version
+                        == PROMPT_VERSION,
+                    )
+                    .limit(1)
+                )
 
             if existing is None:
                 result.append(
-                    endurain_id
+                    activity.endurain_activity_id
                 )
 
         return result
-
 
 def run_pipeline() -> dict:
     now = datetime.now()
