@@ -17,6 +17,11 @@ from database.models import (
 from nextcloud_calendar_client import (
     NextcloudCalendarClient,
 )
+from free_activity_context import (
+    get_free_activities,
+    get_free_activity_analysis,
+    serialize_free_activity,
+)
 
 
 def _month_range(
@@ -55,6 +60,82 @@ def _date_range(
 
     return result
 
+def _actual_training_load(
+    workout_items: list[dict],
+    free_activity_items: list[dict],
+) -> dict:
+    completed_planned = [
+        item
+        for item in workout_items
+        if (
+            item["status"] == "completed"
+            and item["actual"] is not None
+        )
+    ]
+
+    planned_duration_minutes = sum(
+        item["actual"]["duration_minutes"] or 0
+        for item in completed_planned
+    )
+
+    planned_distance_km = sum(
+        item["actual"]["distance_km"] or 0
+        for item in completed_planned
+    )
+
+    free_duration_minutes = sum(
+        item["duration_minutes"] or 0
+        for item in free_activity_items
+    )
+
+    free_distance_km = sum(
+        item["distance_km"] or 0
+        for item in free_activity_items
+    )
+
+    return {
+        "completed_planned_sessions":
+            len(completed_planned),
+        "free_sessions":
+            len(free_activity_items),
+        "total_sessions": (
+            len(completed_planned)
+            + len(free_activity_items)
+        ),
+        "planned_duration_minutes":
+            round(
+                planned_duration_minutes,
+                1,
+            ),
+        "free_duration_minutes":
+            round(
+                free_duration_minutes,
+                1,
+            ),
+        "total_duration_minutes":
+            round(
+                planned_duration_minutes
+                + free_duration_minutes,
+                1,
+            ),
+        "planned_distance_km":
+            round(
+                planned_distance_km,
+                2,
+            ),
+        "free_distance_km":
+            round(
+                free_distance_km,
+                2,
+            ),
+        "total_distance_km":
+            round(
+                planned_distance_km
+                + free_distance_km,
+                2,
+            ),
+    }
+
 def build_monthly_planning_input(
     *,
     target_year: int,
@@ -90,6 +171,23 @@ def build_monthly_planning_input(
                 Workout.scheduled_date
             )
         ).all()
+
+        free_activities = get_free_activities(
+            session,
+            source_start,
+            source_end,
+        )
+
+        free_activity_items = [
+            serialize_free_activity(
+                activity,
+                get_free_activity_analysis(
+                    session,
+                    activity,
+                ),
+            )
+            for activity in free_activities
+        ]
 
         workout_items = []
 
@@ -204,6 +302,13 @@ def build_monthly_planning_input(
                     ),
                 }
             )
+
+        actual_training_load = (
+            _actual_training_load(
+                workout_items,
+                free_activity_items,
+            )
+        )
 
         weekly_rows = session.scalars(
             select(WeeklyReview)
@@ -523,6 +628,10 @@ def build_monthly_planning_input(
             f"{target_year}-{target_month:02d}",
         "source_workouts":
             workout_items,
+        "free_activities":
+            free_activity_items,
+        "actual_training_load":
+            actual_training_load,
         "weekly_reviews":
             weekly_reviews,
         "monthly_review":

@@ -16,7 +16,7 @@ from monthly_planning_context import (
 
 MODEL = "gpt-6-luna"
 
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 DRAFT_DIR = Path(
     "/var/lib/pirowflo-control/training-plans"
@@ -200,6 +200,10 @@ Du erhältst einen strukturierten Planungsinput mit:
 
 - den geplanten und absolvierten Trainings des
   Vormonats,
+- freien, nicht mit einem geplanten Workout
+  verknüpften Trainings des Vormonats,
+- einer deterministischen Zusammenfassung der
+  tatsächlichen Trainingsbelastung,
 - tatsächlichen Leistungsdaten,
 - Analysen einzelner Trainingseinheiten,
 - Weekly Reviews,
@@ -255,6 +259,45 @@ Berücksichtige missed Trainings bei der Beurteilung
 der bisherigen Planumsetzung. Einzelne missed
 Trainings allein rechtfertigen jedoch keine
 grundlegende Änderung der Trainingssteuerung.
+
+FREIE TRAININGS UND TATSÄCHLICHE BELASTUNG:
+
+FREE_ACTIVITIES enthält absolvierte Ruderaktivitäten,
+die keinem geplanten Workout zugeordnet waren.
+
+Diese Einheiten zählen vollständig zur tatsächlichen
+körperlichen Trainingsbelastung des Vormonats.
+
+Wenn eine freie Aktivität eine analysis enthält,
+berücksichtige insbesondere load_assessment, effort,
+progression, recovery_concern und summary.
+
+ACTUAL_TRAINING_LOAD trennt die Belastung aus
+absolvierten geplanten Einheiten von zusätzlichen
+freien Einheiten und enthält außerdem die gesamte
+tatsächlich absolvierte Belastung.
+
+Freie Einheiten zählen NICHT als Erfüllung geplanter
+Workouts.
+
+Leite aus zusätzlichen freien Trainings NICHT
+automatisch eine höhere Trainingskapazität ab.
+
+Insbesondere darf eine höhere Zahl tatsächlich
+absolvierter Einheiten durch freie Trainings nicht
+automatisch zu mehr geplanten Einheiten pro Woche,
+längeren Einheiten oder höherer Intensität im
+Folgemonat führen.
+
+Nutze freie Trainings stattdessen als zusätzliche
+Evidenz dafür, welche Gesamtbelastung tatsächlich
+stattgefunden hat und wie diese vertragen wurde.
+
+Eine Steigerung des geplanten Umfangs oder der
+Intensität benötigt weiterhin Unterstützung durch
+Planumsetzung, Leistungsentwicklung, Recovery und
+wiederkehrende Muster über mehrere Einheiten oder
+Reviews.
 
 Nutze die vorhandenen Workout-Analysen stärker als
 bloße Durchschnittswerte.
